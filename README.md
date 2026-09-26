@@ -85,6 +85,11 @@ pip-compile --generate-hashes --allow-unsafe \
 4. **One-time prekey строго одноразовые** — атомарный `consume` в
    `PreKeyStore`; повторное использование прерывает handshake
 5. Double Ratchet даёт forward secrecy и post-compromise security
+6. **Сессия восстанавливается только через `DoubleRatchet.from_state`**,
+   который перепроверяет всё состояние, включая соответствие
+   `dh_local_pub` приватному ключу. Повреждённый state-файл приводит к
+   явной ошибке, а не к сессии, которая шифрует «вроде бы успешно», а
+   собеседник расшифровать не может
 
 ### Отклонения от спецификации Signal
 
@@ -128,6 +133,7 @@ python -m pytest tests/ -v
 | `tests/test_x3dh.py` | Согласование ключей, KDF, отклонение low-order точек |
 | `tests/test_prekey_store.py` | Одноразовость prekey, атомарность под конкуренцией |
 | `tests/test_double_ratchet.py` | Порядок `KDF_CK`, out-of-order, откат состояния, валидация заголовка, границы skipped keys |
+| `tests/test_from_state.py` | Восстановление сессии: продолжение диалога после перезагрузки, отказ на повреждённом состоянии, согласованность `dh_local_pub`/`dh_local_priv` |
 | `tests/test_primitives.py` | Кросс-валидация HKDF и X25519 против `cryptography` |
 
 ## Лицензия
