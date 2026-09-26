@@ -29,6 +29,7 @@ they occur.
 """
 
 import hmac
+import hashlib
 import os
 from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
@@ -53,8 +54,14 @@ DEFAULT_CONTEXT = b"DecentralizedMessenger-X3DH-v1"
 # X3DH section 4: for 256-bit curves, F is 0xFF repeated 32 times.
 X25519_F = b'\xff' * 32
 
+# Key confirmation, X3DH section 4.3. The MAC is keyed by a value derived from
+# the shared root key, so only a peer that derived the same root key can produce
+# or verify it.
+KEY_CONFIRMATION_INFO = b"WhisperKeyConfirmation"
+
 _DH_LEN = 32
 _SIG_LEN = 64
+_MAC_LEN = 32
 
 
 class X3DHError(Exception):
@@ -76,6 +83,21 @@ class InvalidSignatureError(InvalidHandshakeError):
 
 class InvalidKeyError(X3DHError):
     """Raised for degenerate keys, for example a low-order point."""
+
+
+class KeyConfirmationRequired(X3DHError):
+    """
+    Raised when the root key is requested before key confirmation.
+
+    Without this, an initiator cannot tell a real peer from a responder that
+    derived a different secret and simply said nothing: the handshake would
+    look successful and every message would fail later, or worse, succeed under
+    a key the peer does not hold.
+    """
+
+
+class KeyConfirmationFailed(X3DHError):
+    """Raised when the peer's key confirmation MAC does not verify."""
 
 
 def _u32(value: int) -> bytes:
@@ -249,6 +271,180 @@ class X3DHState:
         use :meth:`master_key`.
         """
         return b''.join(self.dh_parts)
+
+
+@dataclass(frozen=True)
+class KeyConfirmation:
+    """
+    The responder's proof that it derived the same root key.
+
+    Carries a fresh ephemeral key, so the confirmation is not replayable into a
+    later handshake even if the same root key were ever reused.
+    """
+
+    ephemeral_key: PublicKey
+    mac: bytes
+
+    def __post_init__(self) -> None:
+        if len(bytes(self.ephemeral_key)) != _DH_LEN:
+            raise InvalidHandshakeError(
+                f'confirmation ephemeral key must be {_DH_LEN} bytes'
+            )
+        if len(self.mac) != _MAC_LEN:
+            raise KeyConfirmationFailed(
+                f'confirmation MAC must be {_MAC_LEN} bytes'
+            )
+
+
+def confirmation_mac_key(root_key: bytes) -> bytes:
+    """
+    Derive the confirmation MAC key from the X3DH root key.
+
+    Binding the MAC to the root key is what makes confirmation meaningful: the
+    transcript is public, so without this anyone could produce a valid MAC.
+    """
+    if len(root_key) != _DH_LEN:
+        raise InvalidHandshakeError(f'root key must be {_DH_LEN} bytes')
+    return kdf_expand(
+        kdf_extract(b'\x00' * _DH_LEN, root_key), KEY_CONFIRMATION_INFO, _MAC_LEN
+    )
+
+
+def confirmation_mac(
+    root_key: bytes,
+    *,
+    associated_data: bytes,
+    alice_identity: VerifyKey,
+    alice_ephemeral: PublicKey,
+    bob_identity: VerifyKey,
+    bob_ephemeral: PublicKey,
+) -> bytes:
+    """
+    Compute the key confirmation MAC.
+
+    The transcript binds the external associated data, both identity keys, the
+    initiator's ephemeral key and the responder's confirmation ephemeral key, so
+    a confirmation cannot be replayed against a different session or a
+    substituted identity key.
+    """
+    transcript = X25519_F + _length_prefixed(
+        associated_data,
+        bytes(alice_identity),
+        bytes(alice_ephemeral),
+        bytes(bob_identity),
+        bytes(identity_public_x25519(bob_identity)),
+        bytes(bob_ephemeral),
+    )
+    return hmac.new(
+        confirmation_mac_key(root_key), transcript, hashlib.sha256
+    ).digest()
+
+
+class X3DHSession:
+    """
+    A handshake whose root key stays locked until the session is confirmed.
+
+    The initiator starts unconfirmed and must verify the responder's
+    confirmation MAC before :attr:`root_key` yields anything. The responder
+    starts confirmed, because it has nothing to verify: it authenticated the
+    initiator and computed the secret itself. It learns that the initiator
+    received the confirmation when the first ratchet message decrypts.
+    """
+
+    def __init__(
+        self,
+        state: X3DHState,
+        *,
+        is_initiator: bool,
+        alice_identity: Optional[VerifyKey] = None,
+        alice_ephemeral: Optional[PublicKey] = None,
+        bob_identity: Optional[VerifyKey] = None,
+        associated_data: bytes = b'',
+    ) -> None:
+        self._state = state
+        self.is_initiator = is_initiator
+        self._associated_data = associated_data
+        self._alice_identity = alice_identity
+        self._alice_ephemeral = alice_ephemeral
+        self._bob_identity = bob_identity
+        self._bob_ephemeral: Optional[PublicKey] = None
+        self._is_confirmed = not is_initiator
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self._is_confirmed
+
+    @property
+    def one_time_prekey_id(self) -> Optional[int]:
+        return self._state.one_time_prekey_id
+
+    @property
+    def root_key(self) -> bytes:
+        """
+        The 32-byte root key for the Double Ratchet.
+
+        Raises:
+            KeyConfirmationRequired: the initiator has not verified the
+                responder's confirmation yet.
+        """
+        if not self._is_confirmed:
+            raise KeyConfirmationRequired(
+                'verify the responder key confirmation before using the root key'
+            )
+        return self._state.master_key()
+
+    def make_key_confirmation(self) -> KeyConfirmation:
+        """
+        Responder side: produce the confirmation.
+
+        Raises:
+            InvalidHandshakeError: called on an initiator session.
+        """
+        if self.is_initiator:
+            raise InvalidHandshakeError(
+                'only the responder produces a key confirmation'
+            )
+        ephemeral = PrivateKey.generate()
+        self._bob_ephemeral = ephemeral.public_key
+        mac = confirmation_mac(
+            self._state.master_key(),
+            associated_data=self._associated_data,
+            alice_identity=self._alice_identity,
+            alice_ephemeral=self._alice_ephemeral,
+            bob_identity=self._bob_identity,
+            bob_ephemeral=self._bob_ephemeral,
+        )
+        return KeyConfirmation(ephemeral_key=self._bob_ephemeral, mac=mac)
+
+    def verify_key_confirmation(self, confirmation: KeyConfirmation) -> None:
+        """
+        Initiator side: check the responder's confirmation and unlock the key.
+
+        Raises:
+            InvalidHandshakeError: called on a responder session.
+            KeyConfirmationFailed: the MAC does not match.
+        """
+        if not self.is_initiator:
+            raise InvalidHandshakeError(
+                'only the initiator verifies a key confirmation'
+            )
+        if not isinstance(confirmation, KeyConfirmation):
+            raise InvalidHandshakeError('confirmation must be a KeyConfirmation')
+
+        expected = confirmation_mac(
+            self._state.master_key(),
+            associated_data=self._associated_data,
+            alice_identity=self._alice_identity,
+            alice_ephemeral=self._alice_ephemeral,
+            bob_identity=self._bob_identity,
+            bob_ephemeral=confirmation.ephemeral_key,
+        )
+        if not hmac.compare_digest(expected, confirmation.mac):
+            raise KeyConfirmationFailed(
+                'responder key confirmation MAC does not verify'
+            )
+        self._bob_ephemeral = confirmation.ephemeral_key
+        self._is_confirmed = True
 
 
 class X3DH:
@@ -502,6 +698,31 @@ class X3DH:
             one_time_prekey_id=init.one_time_prekey_id,
         )
 
+    def begin(
+        self,
+        identity_private: SigningKey,
+        bundle: PreKeyBundle,
+        associated_data: bytes = b'',
+    ) -> Tuple['X3DHSession', HandshakeInit]:
+        """
+        Initiate a handshake and get a session that is not yet usable.
+
+        Same as :meth:`initiate_handshake`, but the returned session refuses to
+        yield a root key until the responder's key confirmation verifies. Prefer
+        this over :meth:`initiate_handshake` for anything that will send a
+        message.
+        """
+        state, init = self.initiate_handshake(identity_private, bundle, associated_data)
+        session = X3DHSession(
+            state,
+            is_initiator=True,
+            alice_identity=identity_private.verify_key,
+            alice_ephemeral=init.ephemeral_key,
+            bob_identity=bundle.identity_key,
+            associated_data=associated_data,
+        )
+        return session, init
+
     # ------------------------------------------------------------------
     # Key derivation
     # ------------------------------------------------------------------
@@ -612,6 +833,48 @@ class X3DHResponder:
             signed_prekey_signature=self._signed_prekey_signature,
             one_time_prekey=None if candidate is None else candidate.public_key,
             one_time_prekey_id=None if candidate is None else candidate.key_id,
+        )
+
+    def respond(
+        self,
+        init: HandshakeInit,
+        associated_data: bytes = b'',
+    ) -> 'X3DHSession':
+        """
+        Authenticate an initiator handshake and get a responder session.
+
+        Equivalent to :meth:`handle_init`, but returns a session that can
+        produce a key confirmation, which is what lets the initiator verify
+        that this side derived the same root key.
+        """
+        if not isinstance(init, HandshakeInit):
+            raise InvalidHandshakeError('init must be a HandshakeInit')
+
+        # Authenticate BEFORE spending a prekey.
+        #
+        # Consuming first lets anyone drain the pool with forged handshakes.
+        init.verify(associated_data)
+
+        one_time_private: Optional[PrivateKey] = None
+        if init.one_time_prekey_id is not None:
+            one_time_private = self.prekey_store.consume(
+                init.one_time_prekey_id
+            ).private_key
+
+        state = self._x3dh.receive_handshake(
+            self.identity_private,
+            self.signed_prekey_private,
+            one_time_private,
+            init,
+            associated_data,
+        )
+        return X3DHSession(
+            state,
+            is_initiator=False,
+            alice_identity=init.identity_key,
+            alice_ephemeral=init.ephemeral_key,
+            bob_identity=self.identity_private.verify_key,
+            associated_data=associated_data,
         )
 
     def handle_init(

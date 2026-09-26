@@ -36,7 +36,12 @@ from dataclasses import dataclass
 from typing import Tuple
 
 from ..crypto.double_ratchet import PROTOCOL_VERSION
-from ..crypto.x3dh import HandshakeInit, PreKeyBundle
+from ..crypto.x3dh import (
+    HandshakeInit,
+    KeyConfirmation,
+    KeyConfirmationFailed,
+    PreKeyBundle,
+)
 from ..crypto.key_management import identity_public_x25519
 from nacl.exceptions import BadSignatureError
 from nacl.public import PublicKey
@@ -56,6 +61,7 @@ MAX_VARINT_SHIFT = 63
 
 KEY_LEN = 32
 SIG_LEN = 64
+_MAC_LEN = 32
 _UINT32_MAX = 2 ** 32
 _UINT64_MAX = (1 << 64) - 1
 
@@ -214,6 +220,7 @@ def _extract_payload(buf: bytes, offset: int) -> bytes:
 KIND_PREKEY_BUNDLE = 0x01
 KIND_HANDSHAKE_INIT = 0x02
 KIND_RATCHET_MESSAGE = 0x03
+KIND_KEY_CONFIRMATION = 0x04
 
 
 # ---------------------------------------------------------------------------
@@ -459,3 +466,47 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
 def protocol_version() -> int:
     """Session protocol version this build speaks, for the handshake transcript."""
     return PROTOCOL_VERSION
+
+
+# ---------------------------------------------------------------------------
+# key confirmation
+# ---------------------------------------------------------------------------
+
+def encode_key_confirmation(confirmation: KeyConfirmation) -> bytes:
+    """
+    Encode a responder's key confirmation.
+
+    Carrying the MAC in the clear is intended: it is a MAC, not a secret, and
+    it is useless without the root key that keys it.
+    """
+    payload = bytes(confirmation.ephemeral_key) + confirmation.mac
+    return _encode_frame(KIND_KEY_CONFIRMATION, payload)
+
+
+def decode_key_confirmation(data: bytes) -> KeyConfirmation:
+    """
+    Decode a key confirmation.
+
+    Raises:
+        WireError: on any malformation. Whether the MAC is *correct* is decided
+            by :meth:`~src.crypto.x3dh.X3DHSession.verify_key_confirmation`,
+            not here.
+    """
+    _decode_header(data, (KIND_KEY_CONFIRMATION,))
+    payload = _extract_payload(data, 0)
+
+    expected = KEY_LEN + _MAC_LEN
+    if len(payload) != expected:
+        raise TruncatedFrame(
+            f'confirmation payload of {len(payload)} bytes, expected {expected}'
+        )
+
+    try:
+        return KeyConfirmation(
+            ephemeral_key=PublicKey(payload[:KEY_LEN]),
+            mac=payload[KEY_LEN:],
+        )
+    except KeyConfirmationFailed as exc:
+        # Structural validation only; KeyConfirmation.__post_init__ re-checks
+        # the lengths, which the slice above already guarantees.
+        raise InvalidField('malformed key confirmation') from exc

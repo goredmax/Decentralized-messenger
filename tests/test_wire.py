@@ -364,6 +364,57 @@ class TestRatchetMessage:
             decode_ratchet_message(wire)
 
 
+class TestKeyConfirmationWire:
+    def _confirmation(self):
+        from src.crypto.x3dh import KeyConfirmation
+        return KeyConfirmation(
+            ephemeral_key=PrivateKey.generate().public_key,
+            mac=b'\x5a' * 32,
+        )
+
+    def test_round_trip(self):
+        from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+        confirmation = self._confirmation()
+        wire = encode_key_confirmation(confirmation)
+        decoded = decode_key_confirmation(wire)
+        assert bytes(decoded.ephemeral_key) == bytes(confirmation.ephemeral_key)
+        assert decoded.mac == confirmation.mac
+
+    def test_truncation_rejected(self):
+        from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+        wire = encode_key_confirmation(self._confirmation())
+        for cut in range(len(wire)):
+            with pytest.raises(WireError):
+                decode_key_confirmation(wire[:cut])
+
+    def test_trailing_data_rejected(self):
+        from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+        wire = encode_key_confirmation(self._confirmation())
+        with pytest.raises(TrailingData):
+            decode_key_confirmation(wire + b'\x00')
+
+    def test_tampered_mac_decodes_but_fails_verification(self):
+        """
+        The decoder does not judge correctness.
+
+        A MAC is not a signature over the frame, so bit flips decode cleanly and
+        must instead be caught by verify_key_confirmation.
+        """
+        from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+        wire = bytearray(encode_key_confirmation(self._confirmation()))
+        wire[payload_offset(bytes(wire)) + 32] ^= 0xFF
+        decoded = decode_key_confirmation(bytes(wire))
+        assert len(decoded.mac) == 32
+
+    def test_included_in_total_function_corpus(self):
+        from src.protocol.wire import decode_key_confirmation
+        rng = random.Random(99)
+        for _ in range(500):
+            blob = bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 70)))
+            with pytest.raises(WireError):
+                decode_key_confirmation(blob)
+
+
 class TestUntrustedInput:
     """
     The decoders must be total. Anything other than WireError escaping is a bug
