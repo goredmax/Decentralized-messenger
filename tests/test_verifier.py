@@ -31,6 +31,24 @@ def keypair():
     return SigningKey.generate(), SigningKey.generate()
 
 
+def fixed_key(index: int) -> SigningKey:
+    """A reproducible Ed25519 identity key, for tests that need a fixed answer."""
+    return SigningKey(bytes([index]) * 32)
+
+
+def differ_at_first_digit(number) -> str:
+    """
+    ``number``'s digits with the first one replaced by a different one.
+
+    Picking a replacement that is guaranteed to differ, rather than hardcoding
+    a character, is what makes "stops at digit 0" a property of the test
+    instead of a coincidence. Hardcoding 'f' fails once in sixteen runs, because
+    the first digit is 'f' that often.
+    """
+    first = number.digits[0]
+    return ('0' if first != '0' else '1') + number.digits[1:]
+
+
 class TestFormat:
     def test_sixty_digits_in_twelve_groups(self):
         _, a = keypair()
@@ -175,11 +193,29 @@ class TestComparison:
         assert not result.partial
 
     def test_wrong_number_fails_at_the_first_digit(self):
-        local, remote, _ = self._number()
-        theirs = safety_number(local, SigningKey.generate().verify_key)
-        result = verify(local, remote, theirs)
+        """
+        A number derived from a *different identity* is rejected outright.
+
+        The keys are fixed rather than generated because the exact number of
+        matching leading digits is a property of the keys: with random ones the
+        first digits collide by chance about one run in ten, and the assertion
+        below would fail intermittently for no reason connected to the code.
+        Seeds 1, 2 and 3 were chosen because their numbers differ at digit 0.
+        """
+        local, remote, impostor = fixed_key(1), fixed_key(2), fixed_key(3)
+
+        ours = safety_number(local.verify_key, remote.verify_key)
+        theirs = safety_number(local.verify_key, impostor.verify_key)
+        # Guards the fixture itself, so a change to the digest derivation fails
+        # here with an explanation instead of as a puzzling assertion below.
+        assert ours.digits[0] != theirs.digits[0], (
+            'fixed keys no longer differ at digit 0; pick another seed triple'
+        )
+
+        result = verify(local.verify_key, remote.verify_key, theirs)
         assert not result.verified
         assert result.matched_digits == 0
+        assert 'differ at digit 0' in result.describe()
 
     def test_single_digit_change_is_detected(self):
         local, remote, number = self._number()
@@ -210,7 +246,7 @@ class TestComparison:
 
     def test_partial_comparison_still_fails_on_an_early_difference(self):
         local, remote, number = self._number()
-        tampered = number.with_digits('f' + number.digits[1:])
+        tampered = number.with_digits(differ_at_first_digit(number))
         result = verify(local, remote, tampered, min_digits=20)
         assert not result.verified
         assert result.matched_digits == 0
