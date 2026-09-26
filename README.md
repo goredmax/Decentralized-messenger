@@ -1,147 +1,118 @@
 # Децентрализованный мессенджер с E2EE и защитой метаданных
 
-**Статус:** Reference Implementation (Python) → Production (Rust)
+> ⚠️ **Не используйте это для реальных секретов.**
+> Это неаудированный прототип криптографического ядра. Сеть, Tor, хранилище и
+> транспорт **не реализованы**. Независимого аудита не было. Автор этих правок не
+> является аудитором: исправления написаны тем же кодом, который их проверяет.
 
-> ⚠️ **Важно:** Это reference implementation для прототипирования и аудита протокола. Для production использования планируется переписывание ядра на Rust (snow, libsignal-client, arti для Tor).
+**Статус:** Reference implementation (Python) → Production (Rust)
 
 ## Цель
-Создание приватного децентрализованного мессенджера с:
-- **End-to-End Encryption (E2EE)** - сквозное шифрование на основе X3DH + Double Ratchet (Signal Protocol)
-- **Децентрализация** - P2P архитектура без центральных серверов
-- **Tor интеграция** - анонимизация трафика через Tor Onion Services v3
-- **Минимизация метаданных** - padding, timing obfuscation, cover traffic
 
-## Архитектура
+- **End-to-End Encryption (E2EE)** — X3DH + Double Ratchet (Signal Protocol)
+- **Децентрализация** — P2P без центральных серверов *(не реализовано)*
+- **Tor** — анонимизация трафика через onion services *(не реализовано)*
+- **Минимизация метаданных** — padding, timing obfuscation, cover traffic
+  *(не реализовано)*
 
-### Компоненты
+## Что реально есть в репозитории
 
-1. **Криптография (`src/crypto/`)**
-   - X25519 для обмена ключами (ECDH)
-   - AES-256-GCM для шифрования сообщений
-   - Ed25519 для цифровых подписей
-   - Double Ratchet Protocol (как в Signal Protocol)
+| Модуль | Состояние |
+| --- | --- |
+| `src/crypto/x3dh.py` | Реализован. Аутентификация prekey-bundle и handshake. |
+| `src/crypto/double_ratchet.py` | Реализован. Соответствует спецификации Signal. |
+| `src/crypto/prekey_store.py` | Реализован. Атомарный одноразовый учёт prekey. |
+| `src/crypto/kdf.py` | Реализован. HKDF-SHA256 (RFC 5869). |
+| `src/crypto/key_management.py` | Реализован. Обёртки над PyNaCl. |
+| `src/p2p/`, `src/tor/`, `src/storage/` | **Пустые заглушки.** |
+| `src/network/` | Не существует. |
 
-2. **P2P сеть (`src/p2p/`)**
-   - Libp2p для децентрализованной сети
-   - DHT (Distributed Hash Table) для обнаружения узлов
-   - Kademlia для маршрутизации
+Документация в `docs/` и `THREAT_MODEL.md` описывает целевую архитектуру, а не
+текущее состояние кода.
 
-3. **Tor интеграция (`src/tor/`)**
-   - Onion routing для анонимизации
-   - Hidden Services (.onion адреса)
-   - Circuit management
+## Архитектура (целевая)
 
-4. **Сеть (`src/network/`)**
-   - QUIC протокол для транспорта
-   - Multiplexing соединений
-   - NAT traversal
-
-5. **Хранилище (`src/storage/`)**
-   - Локальное зашифрованное хранилище
-   - SQLite с SQLCipher
-   - Ephemeral messages support
+1. **Криптография (`src/crypto/`)** — X25519 (ECDH), Ed25519 (подписи),
+   XChaCha20-Poly1305 (AEAD в ратчете)
+2. **P2P сеть (`src/p2p/`)** — libp2p, DHT, Kademlia
+3. **Tor (`src/tor/`)** — onion services v3, управление цепочками
+4. **Сеть (`src/network/`)** — QUIC, мультиплексирование, NAT traversal
+5. **Хранилище (`src/storage/`)** — SQLite + SQLCipher, ephemeral messages
 
 ## Используемые технологии
 
-### Криптография
-- **libsodium** - проверенная криптографическая библиотека
-- **noise-protocol** - Noise Protocol Framework
+- **PyNaCl / libsodium** — примитивы
+- **libp2p**, **stem** — сеть и Tor *(в requirements, кода нет)*
 
-### P2P
-- **libp2p** - модульная сетевая стек
-- **ipfs** - распределённое хранение (опционально)
-
-### Tor
-- **tor** - основной Tor демон
-- **stem** - Python контроллер для Tor
-- **pytor** - интеграция с Python
-
-### Транспорт
-- **QUIC** - современный транспортный протокол
-- **WebRTC** - для browser клиентов
-
-## Структура проекта
-
-```
-/workspace
-├── src/
-│   ├── crypto/          # Криптографические примитивы
-│   ├── p2p/             # P2P сеть и DHT
-│   ├── network/         # Сетевой транспорт
-│   ├── tor/             # Tor интеграция
-│   └── storage/         # Локальное хранилище
-├── tests/               # Тесты
-├── docs/                # Документация
-├── config/              # Конфигурационные файлы
-└── README.md
-```
+> Замечание: `requirements.txt` закрепляет зависимости только нижними границами
+> (`>=`) без хешей, поэтому сборка невоспроизводима. Это известная проблема,
+> не решённая в рамках крипто-правок. Пакет `sqlcipher-legacy` не является
+> рабочим биндингом SQLCipher; он заменён на `pysqlcipher3` только вместе с
+> реализацией хранилища.
 
 ## Безопасность
 
-### E2EE реализация
-1. Генерация ключей на устройстве пользователя
-2. Обмен ключами через X25519 ECDH
-3. Double Ratchet для forward secrecy
-4. Подпись сообщений через Ed25519
+### E2EE
 
-### Защита метаданных
-1. Использование Tor скрытых сервисов
-2. Padding сообщений до фиксированного размера
-3. Периодическая ротация идентификаторов
-4. No persistent connection logs
+1. Ключи идентичности генерируются на устройстве (Ed25519)
+2. **Prekey-bundle аутентифицируется**: подпись signed prekey проверяется
+   инициатором до использования (`X3DH.verify_bundle`)
+3. **Handshake аутентифицируется**: инициатор подписывает транскрипт, получатель
+   проверяет подпись и берёт identity key из самого транскрипта, а не от
+   вызывающего кода
+4. **One-time prekey строго одноразовые** — атомарный `consume` в
+   `PreKeyStore`; повторное использование прерывает handshake
+5. Double Ratchet даёт forward secrecy и post-compromise security
 
-### Децентрализация
-1. Отсутствие центральных серверов
-2. DHT для discovery peers
-3. Gossip protocol для распространения сообщений
-4. Mesh network topology
+### Отклонения от спецификации Signal
 
-## Этапы разработки
+Осознанные и задокументированные:
 
-### Phase 1: Cryptography Core
-- [ ] Реализация генерации ключей
-- [ ] E2EE шифрование/дешифрование
-- [ ] Double Ratchet Protocol
+- **HKDF `info` = непустой context string.** Спека оставляет `info` пустым.
+  Непустой контекст — это domain separation, он не ослабляет конструкцию, но
+  делает ключи **несовместимыми с libsignal**.
+- **Ed25519 → X25519 конверсия identity key.** Спека использует отдельные
+  ключи для подписи и для DH. Здесь один ключ играет обе роли, что означает
+  компрометацию обеих сразу. Конверсия собрана в одном месте
+  (`key_management.identity_*_x25519`).
+- **Версия протокола 2.** `KDF_CK` в исходном коде был перевёрнут относительно
+  спеки (`ck = HMAC(0x01)`, `mk = HMAC(0x02)`), а строка HKDF была другой.
+  Сессии предыдущей версии **отвергаются при загрузке**, а не интерпретируются
+  наугад.
 
-### Phase 2: P2P Network
-- [ ] Интеграция libp2p
-- [ ] DHT implementation
-- [ ] Peer discovery
+### Известные ограничения
 
-### Phase 3: Tor Integration
-- [ ] Tor hidden services
-- [ ] Circuit management
-- [ ] Onion routing
+- Независимого аудита нет
+- Официальные тест-вектора Signal и RFC в репозиторий **не положены**.
+  Примитивы проверяются кросс-валидацией против независимой реализации
+  (`cryptography`) в `tests/test_primitives.py` — это не замена векторам
+- Защита от глобальной корреляции трафика требует mixnet, её нет
+- Тайминг-анализ на уровне приложения не закрыт полностью
 
-### Phase 4: Messaging Protocol
-- [ ] Message format
-- [ ] Delivery guarantees
-- [ ] Group chats
+### Независимое подтверждение
 
-### Phase 5: Storage & UI
-- [ ] Encrypted local storage
-- [ ] CLI client
-- [ ] GUI client (optional)
+Не прислано и не заявлено.
 
-## Требования к безопасности
+## Тесты
 
-1. **Никогда не хранить**:
-   - Приватные ключи на сервере
-   - Логи сообщений
-   - Метаданные о контактах
+```sh
+pip install -r requirements.txt
+python -m pytest tests/ -v
+```
 
-2. **Всегда использовать**:
-   - Проверенные криптобиблиотеки
-   - Forward secrecy
-   - Perfect forward secrecy (PFS)
-
-3. **Защищать от**:
-   - Timing attacks
-   - Traffic analysis
-   - Sybil attacks
+| Файл | Что проверяет |
+| --- | --- |
+| `tests/test_x3dh_mitm.py` | Регрессии аутентификации: подмена signed prekey, подмена ephemeral key, чужой identity key, replay one-time prekey |
+| `tests/test_x3dh.py` | Согласование ключей, KDF, отклонение low-order точек |
+| `tests/test_prekey_store.py` | Одноразовость prekey, атомарность под конкуренцией |
+| `tests/test_double_ratchet.py` | Порядок `KDF_CK`, out-of-order, откат состояния, валидация заголовка, границы skipped keys |
+| `tests/test_primitives.py` | Кросс-валидация HKDF и X25519 против `cryptography` |
 
 ## Лицензия
-MIT License
+
+MIT
 
 ## Contributing
-Приветствуются contributions focused на security и privacy!
+
+Приветствуются contributions, связанные с security и privacy, особенно:
+официальные тест-вектора Signal, независимый аудит, реализация хранилища.

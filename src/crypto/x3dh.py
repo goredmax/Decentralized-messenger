@@ -1,279 +1,665 @@
 """
-X3DH (Extended Triple Diffie-Hellman) Implementation
+X3DH (Extended Triple Diffie-Hellman) implementation.
 
-Спецификация: https://signal.org/docs/specifications/x3dh/
+Specification: https://signal.org/docs/specifications/x3dh/
 
-Этот модуль реализует протокол X3DH для установления безопасного сеанса между двумя участниками.
+Security notes
+--------------
+The property that makes X3DH worth using is *authentication of the prekey
+bundle*: the initiator must verify that the signed prekey really was signed by
+the identity key it is advertised under, and the responder must verify that the
+initiator owns the identity key it presents. Without both checks X3DH degrades
+to unauthenticated Diffie-Hellman, and an active attacker substitutes keys and
+reads the session.
+
+Both checks are implemented here and cannot be skipped:
+
+* :meth:`X3DH.initiate_handshake` verifies ``signed_prekey_signature`` against
+  ``identity_key`` before any key from the bundle is used.
+* :meth:`X3DH.receive_handshake` accepts a :class:`HandshakeInit` whose
+  signature covers a length-prefixed transcript, and verifies it against the
+  identity key carried *inside* that structure. The caller's word about who the
+  initiator is no longer trusted.
+
+One-time prekeys are single use. :class:`X3DHResponder` enforces that through an
+atomic ``consume`` on a :class:`~src.crypto.prekey_store.PreKeyStore`.
+
+Deliberate deviations from the specification are documented at the points where
+they occur.
 """
 
+import hmac
 import os
-from typing import Tuple, Optional
 from dataclasses import dataclass
-import nacl
+from typing import Optional, Sequence, Tuple
+
+import nacl.bindings
+from nacl.exceptions import BadSignatureError, CryptoError
 from nacl.public import PrivateKey, PublicKey
 from nacl.signing import SigningKey, VerifyKey
-from nacl.exceptions import CryptoError
-import hashlib
-import hmac
+
+from .kdf import extract as kdf_extract
+from .kdf import expand as kdf_expand
+from .key_management import identity_private_x25519, identity_public_x25519
+from .prekey_store import OneTimePreKey, PreKeyStore
+
+# Domain separation for the initiator signature transcript.
+INIT_TRANSCRIPT_LABEL = b"X3DH-init-v1"
+
+# Default context string mixed into the HKDF ``info`` field; see
+# :meth:`X3DH.derive_master_key`.
+DEFAULT_CONTEXT = b"DecentralizedMessenger-X3DH-v1"
+
+# X3DH section 4: for 256-bit curves, F is 0xFF repeated 32 times.
+X25519_F = b'\xff' * 32
+
+_DH_LEN = 32
+_SIG_LEN = 64
 
 
-@dataclass
+class X3DHError(Exception):
+    """Base class for X3DH failures."""
+
+
+class InvalidHandshakeError(X3DHError):
+    """Raised when a handshake structure is malformed or inconsistent."""
+
+
+class InvalidSignatureError(InvalidHandshakeError):
+    """
+    Raised when a prekey bundle or handshake signature does not verify.
+
+    A subset of :class:`InvalidHandshakeError`, so a caller that only wants to
+    reject bad handshakes can catch the parent class.
+    """
+
+
+class InvalidKeyError(X3DHError):
+    """Raised for degenerate keys, for example a low-order point."""
+
+
+def _u32(value: int) -> bytes:
+    """Big-endian 32-bit length prefix, for transcript canonicalisation."""
+    return value.to_bytes(4, 'big')
+
+
+def _length_prefixed(*chunks: Optional[bytes]) -> bytes:
+    """
+    Concatenate chunks with explicit length prefixes.
+
+    Length prefixing keeps the encoding unambiguous, so no two different field
+    sets can produce the same byte string. Without it a signature could be
+    replayed against a differently split set of fields.
+    """
+    out = bytearray()
+    for chunk in chunks:
+        if chunk is None:
+            out += _u32(0)
+        else:
+            out += _u32(len(chunk))
+            out += chunk
+    return bytes(out)
+
+
+def _init_transcript(
+    identity_key: VerifyKey,
+    identity_key_x25519: PublicKey,
+    ephemeral_key: PublicKey,
+    one_time_prekey_id: Optional[int],
+    associated_data: bytes,
+) -> bytes:
+    """
+    Canonical transcript covered by the initiator's handshake signature.
+
+    Binds the identity key, both of its curve representations, the ephemeral
+    key, the referenced prekey id and any external associated data.
+    """
+    opk = (None if one_time_prekey_id is None
+           else one_time_prekey_id.to_bytes(8, 'big'))
+    return _length_prefixed(
+        INIT_TRANSCRIPT_LABEL,
+        bytes(identity_key),
+        bytes(identity_key_x25519),
+        bytes(ephemeral_key),
+        opk,
+        associated_data,
+    )
+
+
+@dataclass(frozen=True)
 class PreKeyBundle:
-    """Набор预ключей для X3DH handshake"""
-    identity_key: PublicKey  # IK_B
-    signed_prekey: PublicKey  # SPK_B
-    signed_prekey_signature: bytes  # Signature(SP K_B)
-    one_time_prekey: Optional[PublicKey] = None  # OPK_B (опционально)
+    """
+    The prekey bundle published by a responder.
+
+    ``signed_prekey_signature`` must be an Ed25519 signature over the raw
+    32-byte ``signed_prekey``, as produced by
+    :meth:`X3DH.generate_signed_prekey`.
+    """
+
+    identity_key: VerifyKey
+    signed_prekey: PublicKey
+    signed_prekey_signature: bytes
+    one_time_prekey: Optional[PublicKey] = None
     one_time_prekey_id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if len(bytes(self.identity_key)) != _DH_LEN:
+            raise InvalidHandshakeError('identity key must be 32 bytes')
+        if len(bytes(self.signed_prekey)) != _DH_LEN:
+            raise InvalidHandshakeError('signed prekey must be 32 bytes')
+        if len(self.signed_prekey_signature) != _SIG_LEN:
+            raise InvalidSignatureError(
+                f'signed prekey signature must be {_SIG_LEN} bytes'
+            )
+        if (self.one_time_prekey is None) != (self.one_time_prekey_id is None):
+            raise InvalidHandshakeError(
+                'one_time_prekey and one_time_prekey_id must both be set or unset'
+            )
+        if self.one_time_prekey is not None and len(bytes(self.one_time_prekey)) != _DH_LEN:
+            raise InvalidHandshakeError('one-time prekey must be 32 bytes')
+
+
+@dataclass(frozen=True)
+class HandshakeInit:
+    """
+    The initiator's handshake message, carrying its own proof of possession.
+
+    ``signature`` is an Ed25519 signature by ``identity_key`` over
+    :meth:`transcript`. This is the only structure :meth:`X3DH.receive_handshake`
+    accepts, so a handshake cannot be processed without proof that the sender
+    owns the identity key it names.
+    """
+
+    identity_key: VerifyKey
+    identity_key_x25519: PublicKey
+    ephemeral_key: PublicKey
+    signature: bytes
+    one_time_prekey_id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ('identity_key', self.identity_key),
+            ('identity_key_x25519', self.identity_key_x25519),
+            ('ephemeral_key', self.ephemeral_key),
+        ):
+            if len(bytes(value)) != _DH_LEN:
+                raise InvalidHandshakeError(f'{name} must be {_DH_LEN} bytes')
+        if len(self.signature) != _SIG_LEN:
+            raise InvalidSignatureError(
+                f'handshake signature must be {_SIG_LEN} bytes'
+            )
+        if self.one_time_prekey_id is not None and not (
+            0 <= self.one_time_prekey_id < 2 ** 64
+        ):
+            raise InvalidHandshakeError('one_time_prekey_id out of range')
+
+    def transcript(self, associated_data: bytes = b'') -> bytes:
+        """Canonical, length-prefixed byte string covered by ``signature``."""
+        return _init_transcript(
+            self.identity_key,
+            self.identity_key_x25519,
+            self.ephemeral_key,
+            self.one_time_prekey_id,
+            associated_data,
+        )
+
+    def verify(self, associated_data: bytes = b'') -> None:
+        """
+        Verify the initiator's signature.
+
+        Raises:
+            InvalidSignatureError: the signature does not match the transcript.
+        """
+        if len(self.signature) != _SIG_LEN:
+            raise InvalidSignatureError(
+                f'handshake signature must be {_SIG_LEN} bytes'
+            )
+        try:
+            self.identity_key.verify(self.transcript(associated_data), self.signature)
+        except BadSignatureError as exc:
+            raise InvalidSignatureError(
+                'initiator handshake signature verification failed'
+            ) from exc
 
 
 @dataclass
 class X3DHState:
-    """Состояние X3DH протокола"""
-    shared_secret: bytes
+    """
+    One side's handshake result.
+
+    The individual DH outputs are kept rather than only their concatenation, so
+    the KDF step cannot be handed an ambiguous buffer. Use :meth:`master_key` to
+    derive the 32-byte root key for the Double Ratchet.
+    """
+
+    dh_parts: Tuple[bytes, ...]
     ephemeral_key: Optional[PrivateKey] = None
+    identity_key: Optional[VerifyKey] = None
+    one_time_prekey_id: Optional[int] = None
+
+    def master_key(self, context: bytes = DEFAULT_CONTEXT) -> bytes:
+        return X3DH.derive_master_key(self.dh_parts, context)
+
+    @property
+    def shared_secret(self) -> bytes:
+        """
+        Raw concatenation of the DH outputs, without F and without the KDF.
+
+        Kept for tests and debugging. Never use it as a message or root key;
+        use :meth:`master_key`.
+        """
+        return b''.join(self.dh_parts)
 
 
 class X3DH:
-    """
-    Extended Triple Diffie-Hellman Key Agreement Protocol
-    
-    Реализует четыре варианта DH вычислений в зависимости от доступности one-time prekey.
-    """
-    
+    """Extended Triple Diffie-Hellman key agreement (Signal specification)."""
+
+    # ------------------------------------------------------------------
+    # Key generation
+    # ------------------------------------------------------------------
+
     @staticmethod
     def generate_identity_keys() -> Tuple[SigningKey, VerifyKey]:
-        """Генерация пары ключей идентичности (долгосрочные)"""
+        """Generate the long-term Ed25519 identity key pair."""
         signing_key = SigningKey.generate()
-        verify_key = signing_key.verify_key
-        return signing_key, verify_key
-    
+        return signing_key, signing_key.verify_key
+
     @staticmethod
-    def generate_signed_prekey(identity_key: SigningKey) -> Tuple[PrivateKey, PublicKey, bytes]:
+    def generate_signed_prekey(
+        identity_key: SigningKey,
+    ) -> Tuple[PrivateKey, PublicKey, bytes]:
         """
-        Генерация подписанного预ключа
-        
-        Возвращает: (spk_private, spk_public, signature)
+        Generate a signed prekey.
+
+        Returns:
+            ``(spk_private, spk_public, signature)``, where ``signature`` is the
+            raw 64-byte Ed25519 signature over ``spk_public.encode()``.
         """
         spk_private = PrivateKey.generate()
         spk_public = spk_private.public_key
-        
-        # Подписываем prekey долгосрочным ключом идентичности
         signature = identity_key.sign(spk_public.encode()).signature
-        
         return spk_private, spk_public, signature
-    
+
     @staticmethod
-    def generate_one_time_prekey() -> Tuple[int, PrivateKey, PublicKey]:
-        """
-        Генерация одноразового预ключа
-        
-        Возвращает: (prekey_id, opk_private, opk_public)
-        """
-        prekey_id = int.from_bytes(os.urandom(4), 'big')
-        opk_private = PrivateKey.generate()
-        opk_public = opk_private.public_key
-        
-        return prekey_id, opk_private, opk_public
-    
-    def _dh(self, private_key: PrivateKey, public_key: PublicKey) -> bytes:
-        """
-        Базовая DH операция используя X25519
-        
-        Возвращает 32-byte shared secret
-        """
-        # Используем низкоуровневую операцию скалярного умножения
-        return nacl.bindings.crypto_scalarmult(
-            private_key.encode(),
-            public_key.encode()
+    def generate_one_time_prekey(key_id: Optional[int] = None) -> OneTimePreKey:
+        """Generate a single-use prekey. See :mod:`src.crypto.prekey_store`."""
+        private_key = PrivateKey.generate()
+        if key_id is None:
+            key_id = int.from_bytes(os.urandom(8), 'big')
+        return OneTimePreKey(
+            key_id=key_id,
+            private_key=private_key,
+            public_key=private_key.public_key,
         )
-    
-    def _dh1(self, private_key: PrivateKey, public_key: PublicKey) -> bytes:
-        """DH(IK_A, SPK_B)"""
-        return self._dh(private_key, public_key)
-    
-    def _dh2(self, private_key: PrivateKey, public_key: PublicKey) -> bytes:
-        """DH(EK_A, IK_B)"""
-        return self._dh(private_key, public_key)
-    
-    def _dh3(self, private_key: PrivateKey, public_key: PublicKey) -> bytes:
-        """DH(EK_A, SPK_B)"""
-        return self._dh(private_key, public_key)
-    
-    def _dh4(self, private_key: PrivateKey, public_key: PublicKey) -> bytes:
-        """DH(EK_A, OPK_B)"""
-        return self._dh(private_key, public_key)
-    
+
+    # ------------------------------------------------------------------
+    # Bundle authentication
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def verify_bundle(bundle: PreKeyBundle) -> None:
+        """
+        Verify that ``bundle.signed_prekey`` was signed by ``bundle.identity_key``.
+
+        This is the check whose absence allows an active MITM. It is called by
+        :meth:`initiate_handshake` and exposed separately so a caller can
+        validate a freshly fetched bundle before trusting or logging it.
+
+        Raises:
+            InvalidSignatureError: signature mismatch or malformed signature.
+        """
+        if len(bundle.signed_prekey_signature) != _SIG_LEN:
+            raise InvalidSignatureError(
+                f'signed prekey signature must be {_SIG_LEN} bytes'
+            )
+        try:
+            bundle.identity_key.verify(
+                bundle.signed_prekey.encode(), bundle.signed_prekey_signature
+            )
+        except BadSignatureError as exc:
+            raise InvalidSignatureError(
+                'signed prekey signature does not match the advertised identity key'
+            ) from exc
+
+    # ------------------------------------------------------------------
+    # Diffie-Hellman primitive
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dh(private_key: PrivateKey, public_key: PublicKey) -> bytes:
+        """
+        One X25519 Diffie-Hellman operation.
+
+        Raises:
+            InvalidKeyError: degenerate (all-zero) result, which is what a
+                low-order or otherwise non-generator public key produces.
+        """
+        try:
+            shared = nacl.bindings.crypto_scalarmult(
+                bytes(private_key), bytes(public_key)
+            )
+        except CryptoError as exc:
+            raise InvalidKeyError('X25519 rejected the public key') from exc
+        if shared == b'\x00' * _DH_LEN:
+            raise InvalidKeyError(
+                'degenerate X25519 output: public key is a low-order point'
+            )
+        return shared
+
+    def _initiator_dh_parts(
+        self,
+        identity_private: SigningKey,
+        ephemeral: PrivateKey,
+        bundle: PreKeyBundle,
+    ) -> Tuple[bytes, ...]:
+        """
+        DH1 = DH(IK_A, SPK_B)
+        DH2 = DH(EK_A, IK_B)
+        DH3 = DH(EK_A, SPK_B)
+        DH4 = DH(EK_A, OPK_B)   -- only when the bundle carries a one-time prekey
+        """
+        identity_private_x = identity_private_x25519(identity_private)
+        # The bundle's Ed25519 identity key is converted for the DH2 input. The
+        # conversion is deterministic, so DH2 still commits to the signed key.
+        identity_public_x = identity_public_x25519(bundle.identity_key)
+
+        parts = [
+            self._dh(identity_private_x, bundle.signed_prekey),
+            self._dh(ephemeral, identity_public_x),
+            self._dh(ephemeral, bundle.signed_prekey),
+        ]
+        if bundle.one_time_prekey is not None:
+            parts.append(self._dh(ephemeral, bundle.one_time_prekey))
+        return tuple(parts)
+
+    def _responder_dh_parts(
+        self,
+        identity_private: SigningKey,
+        signed_prekey_private: PrivateKey,
+        one_time_prekey_private: Optional[PrivateKey],
+        init: HandshakeInit,
+    ) -> Tuple[bytes, ...]:
+        """
+        DH1 = DH(SPK_B, IK_A)
+        DH2 = DH(IK_B, EK_A)
+        DH3 = DH(SPK_B, EK_A)
+        DH4 = DH(OPK_B, EK_A)   -- only when a one-time prekey is present
+        """
+        identity_private_x = identity_private_x25519(identity_private)
+
+        parts = [
+            self._dh(signed_prekey_private, init.identity_key_x25519),
+            self._dh(identity_private_x, init.ephemeral_key),
+            self._dh(signed_prekey_private, init.ephemeral_key),
+        ]
+        if init.one_time_prekey_id is not None:
+            if one_time_prekey_private is None:
+                raise InvalidHandshakeError(
+                    'initiator referenced a one-time prekey but none was supplied'
+                )
+            parts.append(self._dh(one_time_prekey_private, init.ephemeral_key))
+        return tuple(parts)
+
+    # ------------------------------------------------------------------
+    # Handshake
+    # ------------------------------------------------------------------
+
     def initiate_handshake(
         self,
         identity_private: SigningKey,
-        bundle: PreKeyBundle
-    ) -> Tuple[X3DHState, PublicKey]:
+        bundle: PreKeyBundle,
+        associated_data: bytes = b'',
+    ) -> Tuple[X3DHState, HandshakeInit]:
         """
-        Инициация handshake (сторона A)
-        
-        Согласно спецификации Signal X3DH:
-        DH1 = DH(IK_A, SPK_B)
-        DH2 = DH(EK_A, IK_B)  ← Эфемерный ключ, НЕ Identity!
-        DH3 = DH(EK_A, SPK_B)
-        DH4 = DH(EK_A, OPK_B) [если есть OPK]
-        
-        SK = KDF(DH1 || DH2 || DH3 || DH4)
-        
-        Args:
-            identity_private: Долгосрочный ключ идентичности A (SigningKey)
-            bundle: PreKey bundle от B
-            
+        Initiate a handshake as the initiator.
+
+        The bundle's signed-prekey signature is verified *before* any bundle key
+        is used, so a bundle whose signed prekey was substituted by an active
+        attacker raises :class:`InvalidSignatureError` instead of silently
+        producing a shared secret the attacker also knows.
+
         Returns:
-            (state, ephemeral_public_key)
+            ``(state, init)``. ``init`` must be delivered to the responder and
+            passed to :meth:`receive_handshake` unmodified; it carries the proof
+            that the initiator owns the identity key it names.
         """
-        # Для DH операций нам нужен private key в формате X25519
-        # Identity key - это Ed25519 signing key, конвертируем в X25519
-        identity_private_x = PrivateKey(identity_private.to_curve25519_private_key().encode())
-        
-        # Генерируем эфемерный ключ
+        if not isinstance(identity_private, SigningKey):
+            raise InvalidHandshakeError('identity_private must be a SigningKey')
+        if not isinstance(bundle, PreKeyBundle):
+            raise InvalidHandshakeError('bundle must be a PreKeyBundle')
+
+        # Authenticate the bundle first: nothing below this line may run on an
+        # unverified bundle.
+        self.verify_bundle(bundle)
+
         ephemeral = PrivateKey.generate()
-        ephemeral_public = ephemeral.public_key
-        
-        # Конвертируем Identity public key Bob из Ed25519 в X25519 для DH2
-        # bundle.identity_key - это Ed25519 VerifyKey, нужно конвертировать
-        bob_ik_x25519 = PublicKey(bundle.identity_key.to_curve25519_public_key().encode())
-        
-        # Вычисляем DH составляющие согласно спецификации
-        # DH1 = DH(IK_A, SPK_B)
-        dh1 = self._dh(identity_private_x, bundle.signed_prekey)
-        
-        # DH2 = DH(EK_A, IK_B) ← ИСПРАВЛЕНО: используем ephemeral и конвертированный IK_B
-        dh2 = self._dh(ephemeral, bob_ik_x25519)
-        
-        # DH3 = DH(EK_A, SPK_B)
-        dh3 = self._dh(ephemeral, bundle.signed_prekey)
-        
-        # Собираем shared secret
-        if bundle.one_time_prekey is not None:
-            # DH4 = DH(EK_A, OPK_B)
-            dh4 = self._dh(ephemeral, bundle.one_time_prekey)
-            shared_secret = dh1 + dh2 + dh3 + dh4
-        else:
-            # Без one-time prekey
-            shared_secret = dh1 + dh2 + dh3
-        
-        state = X3DHState(shared_secret=shared_secret, ephemeral_key=ephemeral)
-        return state, ephemeral_public
-    
+        dh_parts = self._initiator_dh_parts(identity_private, ephemeral, bundle)
+        identity_public = identity_private.verify_key
+
+        transcript = _init_transcript(
+            identity_public,
+            identity_public_x25519(identity_public),
+            ephemeral.public_key,
+            bundle.one_time_prekey_id,
+            associated_data,
+        )
+        signature = identity_private.sign(transcript).signature
+
+        init = HandshakeInit(
+            identity_key=identity_public,
+            identity_key_x25519=identity_public_x25519(identity_public),
+            ephemeral_key=ephemeral.public_key,
+            signature=signature,
+            one_time_prekey_id=bundle.one_time_prekey_id,
+        )
+        state = X3DHState(
+            dh_parts=dh_parts,
+            ephemeral_key=ephemeral,
+            identity_key=identity_public,
+            one_time_prekey_id=bundle.one_time_prekey_id,
+        )
+        return state, init
+
     def receive_handshake(
         self,
         identity_private: SigningKey,
         signed_prekey_private: PrivateKey,
         one_time_prekey_private: Optional[PrivateKey],
-        ephemeral_public: PublicKey,
-        initiator_identity_x25519: PublicKey  # Уже в X25519 формате
+        init: HandshakeInit,
+        associated_data: bytes = b'',
     ) -> X3DHState:
         """
-        Обработка handshake (сторона B)
-        
-        Согласно спецификации Signal X3DH:
-        DH1 = DH(A_IK, B_SPK) == DH(B_SPK, A_IK)
-        DH2 = DH(A_EK, B_IK)  == DH(B_IK, A_EK) ← Эфемерный ключ Alice!
-        DH3 = DH(A_EK, B_SPK) == DH(B_SPK, A_EK)
-        DH4 = DH(A_EK, B_OPK) == DH(B_OPK, A_EK) [если есть OPK]
-        
-        SK = KDF(DH1 || DH2 || DH3 || DH4)
-        
-        Args:
-            identity_private: Долгосрочный ключ идентичности B (SigningKey Ed25519)
-            signed_prekey_private: Приватный ключ signed prekey (X25519)
-            one_time_prekey_private: Приватный ключ one-time prekey (если есть, X25519)
-            ephemeral_public: Эфемерный публичный ключ от A (X25519)
-            initiator_identity_x25519: Публичный ключ идентичности A в X25519 формате
-            
-        Returns:
-            X3DHState с shared secret
+        Process an initiator handshake as the responder.
+
+        The initiator's identity key is taken from ``init`` and authenticated
+        against the signature carried in ``init``, rather than being accepted
+        from the caller.
+
+        Raises:
+            InvalidSignatureError: the initiator did not prove ownership of the
+                identity key it presented, or the transcript was tampered with.
         """
-        # Конвертируем identity key B в X25519 формат
-        identity_private_x = PrivateKey(identity_private.to_curve25519_private_key().encode())
-        
-        # Вычисляем DH составляющие согласно спецификации (симметрично стороне A)
-        # DH1 = DH(B_SPK, A_IK)
-        dh1 = self._dh(signed_prekey_private, initiator_identity_x25519)
-        
-        # DH2 = DH(B_IK, A_EK) ← ИСПРАВЛЕНО: используем ephemeral public key Alice
-        dh2 = self._dh(identity_private_x, ephemeral_public)
-        
-        # DH3 = DH(B_SPK, A_EK)
-        dh3 = self._dh(signed_prekey_private, ephemeral_public)
-        
-        # Собираем shared secret
-        if one_time_prekey_private is not None:
-            # DH4 = DH(B_OPK, A_EK)
-            dh4 = self._dh(one_time_prekey_private, ephemeral_public)
-            shared_secret = dh1 + dh2 + dh3 + dh4
-        else:
-            shared_secret = dh1 + dh2 + dh3
-        
-        return X3DHState(shared_secret=shared_secret)
-    
+        if not isinstance(init, HandshakeInit):
+            raise InvalidHandshakeError('init must be a HandshakeInit')
+
+        init.verify(associated_data)
+
+        # The DH2 input is re-derived from the verified identity key and
+        # compared, so a mismatch cannot be smuggled past verification.
+        expected_x = identity_public_x25519(init.identity_key)
+        if not hmac.compare_digest(bytes(expected_x), bytes(init.identity_key_x25519)):
+            raise InvalidSignatureError(
+                'identity_key_x25519 does not match identity_key'
+            )
+
+        dh_parts = self._responder_dh_parts(
+            identity_private, signed_prekey_private, one_time_prekey_private, init
+        )
+        return X3DHState(
+            dh_parts=dh_parts,
+            ephemeral_key=None,
+            identity_key=init.identity_key,
+            one_time_prekey_id=init.one_time_prekey_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Key derivation
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
-        """HKDF Extract step using HMAC-SHA256."""
-        if not salt:
-            salt = b'\x00' * 32
-        return hmac.new(salt, ikm, hashlib.sha256).digest()
-    
+        """Thin delegate to the shared HKDF implementation."""
+        return kdf_extract(salt, ikm)
+
     @staticmethod
     def _hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
-        """HKDF Expand step using HMAC-SHA256."""
-        okm = b''
-        t = b''
-        i = 1
-        while len(okm) < length:
-            t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
-            okm += t
-            i += 1
-        return okm[:length]
-    
+        """Thin delegate to the shared HKDF implementation."""
+        return kdf_expand(prk, info, length)
+
     @staticmethod
-    def derive_master_key(shared_secret: bytes, info: bytes = b"MyApp-X3DH-v1") -> bytes:
+    def derive_master_key(
+        dh_parts: Sequence[bytes],
+        context: bytes = DEFAULT_CONTEXT,
+    ) -> bytes:
         """
-        Derive master key из shared secret используя KDF
-        
-        Использует HKDF-SHA256 как указано в спецификации Signal X3DH.
-        
-        Согласно спецификации:
-        - DH1 = DH(IK_A, SPK_B) или DH(SP K_B, IK_A)
-        - DH2 = DH(EK_A, IK_B) или DH(IK_B, EK_A)
-        - DH3 = DH(EK_A, SPK_B) или DH(SP K_B, EK_A)
-        - DH4 = DH(EK_A, OPK_B) или DH(OPK_B, EK_A) [если есть OPK]
-        
-        SK = HKDF-SHA256(
-            salt = 32 нулевых байта,
-            ikm = F || DH1 || DH2 || DH3 || DH4 (или без DH4),
-            info = context string,
-            length = 32
+        Derive the 32-byte root key from the individual DH outputs.
+
+        The specification defines ``SK = KDF(F || DH1 || DH2 || DH3 || DH4)``
+        with ``F = 0xFF * 32`` for X25519.
+
+        This takes the *separate* DH outputs rather than one concatenated
+        buffer on purpose. The 3-DH and 4-DH cases are 96 and 128 bytes, and the
+        already-prefixed 3-DH form ``F || DH1 || DH2 || DH3`` is also 128 bytes,
+        so a length-sniffing implementation cannot tell the last two apart and
+        will silently derive different keys on the two sides. Taking a sequence
+        removes the ambiguity.
+
+        ``context`` is mixed in as the HKDF ``info``. The specification leaves
+        ``info`` empty; a non-empty protocol-specific context is deliberate
+        domain separation and does not weaken the construction. This is a
+        documented deviation, and it also means these keys are not
+        interchangeable with libsignal's.
+
+        Raises:
+            TypeError: ``dh_parts`` is a single buffer, not a sequence of parts.
+            ValueError: wrong number of parts, or a part that is not 32 bytes.
+        """
+        if isinstance(dh_parts, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                'derive_master_key expects the separate DH outputs as a list or '
+                'tuple, not one concatenated buffer: a buffer is ambiguous '
+                'between the 3-DH and 4-DH cases'
+            )
+        parts = list(dh_parts)
+        if len(parts) not in (3, 4):
+            raise ValueError(f'X3DH uses 3 or 4 DH outputs, got {len(parts)}')
+        for index, part in enumerate(parts):
+            if len(part) != _DH_LEN:
+                raise ValueError(
+                    f'DH output {index} must be {_DH_LEN} bytes, got {len(part)}'
+                )
+
+        salt = b'\x00' * _DH_LEN
+        prk = kdf_extract(salt, X25519_F + b''.join(parts))
+        return kdf_expand(prk, context, _DH_LEN)
+
+
+@dataclass
+class X3DHResponder:
+    """
+    Responder side of X3DH, with single-use prekey enforcement.
+
+    Holds the long-term identity key, the active signed prekey and a
+    :class:`~src.crypto.prekey_store.PreKeyStore`. The store's atomic
+    ``consume`` is what makes a one-time prekey genuinely single use.
+    """
+
+    identity_private: SigningKey
+    signed_prekey_private: PrivateKey
+    prekey_store: PreKeyStore
+    context: bytes = DEFAULT_CONTEXT
+
+    def __post_init__(self) -> None:
+        self._x3dh = X3DH()
+        # Publish exactly the prekey whose private half handle_init will use,
+        # so the advertised signature and the DH key cannot drift apart.
+        self._signed_prekey_public = self.signed_prekey_private.public_key
+        self._signed_prekey_signature = self.identity_private.sign(
+            self._signed_prekey_public.encode()
+        ).signature
+
+    @property
+    def identity_public(self) -> VerifyKey:
+        return self.identity_private.verify_key
+
+    def publish_bundle(self) -> PreKeyBundle:
+        """
+        Build the bundle to hand to an initiator.
+
+        Publication does not consume a one-time prekey: the handshake may never
+        arrive, and consuming here would silently shrink the pool. The atomic
+        decision happens in :meth:`handle_init`.
+
+        A production server must additionally *reserve* the prekey it hands out,
+        so two clients are never issued the same one. This reference
+        implementation does not model reservation; see the module docstring of
+        :mod:`src.crypto.prekey_store`.
+        """
+        candidate = self.prekey_store.peek_any()
+        return PreKeyBundle(
+            identity_key=self.identity_public,
+            signed_prekey=self._signed_prekey_public,
+            signed_prekey_signature=self._signed_prekey_signature,
+            one_time_prekey=None if candidate is None else candidate.public_key,
+            one_time_prekey_id=None if candidate is None else candidate.key_id,
         )
-        
-        где F = 0xFF * 32 для X25519
-        
-        Args:
-            shared_secret: Конкатенация F || DH1 || DH2 || DH3 || DH4
-            info: Context string для HKDF (должна быть одинаковой у обеих сторон)
-            
-        Returns:
-            32-byte master key
+
+    def handle_init(
+        self,
+        init: HandshakeInit,
+        associated_data: bytes = b'',
+    ) -> X3DHState:
         """
-        # Добавляем префикс F = 0xFF * 32 если его нет
-        # Это требуется спецификацией X3DH для X25519
-        if len(shared_secret) == 128:  # Только DH1||DH2||DH3||DH4
-            F = b'\xff' * 32
-            km = F + shared_secret
-        elif len(shared_secret) == 96:  # Только DH1||DH2||DH3 (без OPK)
-            F = b'\xff' * 32
-            km = F + shared_secret
-        else:
-            # Предполагаем что F уже добавлен
-            km = shared_secret
-        
-        # HKDF-SHA256 с нулевым salt
-        salt = b'\x00' * 32
-        prk = X3DH._hkdf_extract(salt, km)
-        return X3DH._hkdf_expand(prk, info, 32)
+        Verify and process an initiator handshake, consuming the one-time prekey.
+
+        The prekey is consumed atomically before the shared secret is computed,
+        so a replayed or duplicated handshake cannot reuse it.
+
+        If the referenced prekey is already spent, the handshake is aborted. The
+        initiator's signature covers the prekey id, so the responder cannot
+        silently downgrade to the 3-DH variant: the initiator would derive a
+        different root key. Recovery is a fresh handshake against a fresh
+        bundle.
+
+        Raises:
+            OneTimePreKeyAlreadyUsed: the referenced prekey was already spent.
+                Accepting it would destroy forward secrecy.
+            NoSuchPreKey: the referenced prekey id is unknown.
+            InvalidSignatureError: the initiator failed authentication.
+        """
+        if not isinstance(init, HandshakeInit):
+            raise InvalidHandshakeError('init must be a HandshakeInit')
+
+        # Authenticate BEFORE spending a prekey.
+        #
+        # Consuming first lets anyone burn the whole pool by sending forged
+        # handshakes: each one would take a prekey and only then fail
+        # verification, leaving the responder unable to accept genuine
+        # handshakes with forward secrecy.
+        init.verify(associated_data)
+
+        one_time_private: Optional[PrivateKey] = None
+        if init.one_time_prekey_id is not None:
+            # Raises if the prekey was already used; that is a security event,
+            # not a recoverable condition, so it propagates.
+            one_time_private = self.prekey_store.consume(
+                init.one_time_prekey_id
+            ).private_key
+
+        return self._x3dh.receive_handshake(
+            self.identity_private,
+            self.signed_prekey_private,
+            one_time_private,
+            init,
+            associated_data,
+        )
