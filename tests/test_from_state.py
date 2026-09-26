@@ -451,20 +451,26 @@ class TestRestoreThroughSessionStore:
     def test_conversation_survives_repeated_restarts(self, tmp_path):
         from src.storage.store import SessionStore
 
-        alice, bob = create_session_pair()
+        alice, peer = create_session_pair()
         store = SessionStore(str(tmp_path), 'correct horse battery staple')
-        assert bob.decrypt(*alice.encrypt(b'before any restart')) == b'before any restart'
-        store.save('bob', bob.state)
+        # The peer's half of the session is only ever reached through the file.
+        # Keeping a live ratchet around and reloading from it anyway would prove
+        # nothing, so the loop below is driven entirely by what was saved.
+        assert peer.decrypt(*alice.encrypt(b'before any restart')) == \
+            b'before any restart'
+        store.save('bob', peer.state)
+        del peer
 
         for round_number in range(3):
-            # A restart throws away every live object; only the file survives.
-            del bob
-            reloaded = DoubleRatchet.from_state(store.load('bob', PROTOCOL_VERSION))
-
+            reloaded = DoubleRatchet.from_state(
+                store.load('bob', PROTOCOL_VERSION)
+            )
             message = f'after restart {round_number}'.encode()
             assert reloaded.decrypt(*alice.encrypt(message)) == message
             store.save('bob', reloaded.state)
-            bob = reloaded
+            # Drop the live object again: the next round must start from the
+            # file, not from anything still in memory.
+            del reloaded
 
     def test_tampered_state_file_is_refused_at_load(self, tmp_path):
         """
