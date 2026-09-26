@@ -62,6 +62,18 @@ def payload_offset(wire: bytes) -> int:
     return offset
 
 
+def publish(responder, with_one_time_prekey=True):
+    """
+    Publish a bundle, opting in to the weaker variant when the pool is empty.
+
+    An empty pool now refuses by default, so a test that means to exercise the
+    prekey-less encoding has to say so rather than get it by accident.
+    """
+    return responder.publish_bundle(
+        allow_no_one_time_prekey=not with_one_time_prekey
+    )
+
+
 def make_bundle(with_one_time_prekey=True):
     x3dh = X3DH()
     identity_private, _ = x3dh.generate_identity_keys()
@@ -80,7 +92,9 @@ def make_bundle(with_one_time_prekey=True):
 def make_init(with_one_time_prekey=True):
     x3dh, responder = make_bundle(with_one_time_prekey)
     alice_private, _ = x3dh.generate_identity_keys()
-    _, init = x3dh.initiate_handshake(alice_private, responder.publish_bundle())
+    _, init = x3dh.initiate_handshake(
+        alice_private, publish(responder, with_one_time_prekey)
+    )
     return x3dh, responder, init
 
 
@@ -137,21 +151,21 @@ class TestFrameHeader:
 
     def test_unknown_version_rejected(self):
         _, responder = make_bundle()
-        wire = bytearray(encode_prekey_bundle(responder.publish_bundle()))
+        wire = bytearray(encode_prekey_bundle(publish(responder)))
         wire[0] = WIRE_VERSION + 1
         with pytest.raises(UnsupportedVersion):
             decode_prekey_bundle(bytes(wire))
 
     def test_unknown_kind_rejected(self):
         _, responder = make_bundle()
-        wire = bytearray(encode_prekey_bundle(responder.publish_bundle()))
+        wire = bytearray(encode_prekey_bundle(publish(responder)))
         wire[1] = 0x7F
         with pytest.raises(UnknownMessageKind):
             decode_prekey_bundle(bytes(wire))
 
     def test_kind_must_match_decoder(self):
         _, responder = make_bundle()
-        wire = encode_prekey_bundle(responder.publish_bundle())
+        wire = encode_prekey_bundle(publish(responder))
         with pytest.raises(UnknownMessageKind):
             decode_handshake_init(wire)
 
@@ -164,20 +178,20 @@ class TestFrameHeader:
 
     def test_truncation_at_every_offset_rejected(self):
         _, responder = make_bundle()
-        wire = encode_prekey_bundle(responder.publish_bundle())
+        wire = encode_prekey_bundle(publish(responder))
         for cut in range(len(wire)):
             with pytest.raises(WireError):
                 decode_prekey_bundle(wire[:cut])
 
     def test_trailing_data_rejected(self):
         _, responder = make_bundle()
-        wire = encode_prekey_bundle(responder.publish_bundle())
+        wire = encode_prekey_bundle(publish(responder))
         with pytest.raises(TrailingData):
             decode_prekey_bundle(wire + b'\x00')
 
     def test_trailing_garbage_rejected(self):
         _, responder = make_bundle()
-        wire = encode_prekey_bundle(responder.publish_bundle())
+        wire = encode_prekey_bundle(publish(responder))
         with pytest.raises(TrailingData):
             decode_prekey_bundle(wire + b'junkjunk')
 
@@ -185,26 +199,26 @@ class TestFrameHeader:
 class TestPreKeyBundle:
     def test_round_trip_with_one_time_prekey(self):
         _, responder = make_bundle(True)
-        bundle = responder.publish_bundle()
+        bundle = publish(responder)
         decoded = decode_prekey_bundle(encode_prekey_bundle(bundle))
         assert encode_prekey_bundle(decoded) == encode_prekey_bundle(bundle)
         assert decoded.one_time_prekey_id == bundle.one_time_prekey_id
 
     def test_round_trip_without_one_time_prekey(self):
         _, responder = make_bundle(False)
-        bundle = responder.publish_bundle()
+        bundle = publish(responder, with_one_time_prekey=False)
         decoded = decode_prekey_bundle(encode_prekey_bundle(bundle))
         assert decoded.one_time_prekey is None
         assert decoded.one_time_prekey_id is None
 
     def test_decoded_bundle_still_authenticates(self):
         _, responder = make_bundle()
-        wire = encode_prekey_bundle(responder.publish_bundle())
+        wire = encode_prekey_bundle(publish(responder))
         X3DH.verify_bundle(decode_prekey_bundle(wire))
 
     def test_tampered_signature_rejected_by_verification(self):
         _, responder = make_bundle()
-        wire = bytearray(encode_prekey_bundle(responder.publish_bundle()))
+        wire = bytearray(encode_prekey_bundle(publish(responder)))
         base = payload_offset(bytes(wire))
         wire[base + 32 + 32 + 63] ^= 0xFF   # last byte of the signature
         decoded = decode_prekey_bundle(bytes(wire))
@@ -213,7 +227,7 @@ class TestPreKeyBundle:
 
     def test_bad_one_time_flag_rejected(self):
         _, responder = make_bundle(False)
-        wire = bytearray(encode_prekey_bundle(responder.publish_bundle()))
+        wire = bytearray(encode_prekey_bundle(publish(responder, with_one_time_prekey=False)))
         base = payload_offset(bytes(wire))
         wire[base + 32 + 32 + 64] = 0x02
         with pytest.raises(InvalidField):
@@ -221,7 +235,7 @@ class TestPreKeyBundle:
 
     def test_flag_one_without_key_rejected(self):
         _, responder = make_bundle(False)
-        wire = bytearray(encode_prekey_bundle(responder.publish_bundle()))
+        wire = bytearray(encode_prekey_bundle(publish(responder, with_one_time_prekey=False)))
         base = payload_offset(bytes(wire))
         wire[base + 32 + 32 + 64] = 0x01
         with pytest.raises(TruncatedFrame):
@@ -435,7 +449,7 @@ class TestUntrustedInput:
         _, responder = make_bundle(True)
         _, _, init = make_init(True)
         samples = [
-            encode_prekey_bundle(responder.publish_bundle()),
+            encode_prekey_bundle(publish(responder)),
             encode_handshake_init(init),
             encode_ratchet_message(
                 b'\x00' * 64,
@@ -460,7 +474,7 @@ class TestUntrustedInput:
         """Control for the test above: the corpus really is decodable."""
         _, responder = make_bundle(True)
         _, _, init = make_init(True)
-        assert decode_prekey_bundle(encode_prekey_bundle(responder.publish_bundle()))
+        assert decode_prekey_bundle(encode_prekey_bundle(publish(responder)))
         assert decode_handshake_init(encode_handshake_init(init))
         assert decode_ratchet_message(
             encode_ratchet_message(

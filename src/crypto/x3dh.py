@@ -85,6 +85,28 @@ class InvalidKeyError(X3DHError):
     """Raised for degenerate keys, for example a low-order point."""
 
 
+class PrekeyPoolExhausted(X3DHError):
+    """
+    Raised when a bundle is requested but the one-time prekey pool is empty.
+
+    A responder with an empty pool can still run the 3-DH variant, which works
+    but has no forward secrecy. Returning such a bundle by default would make
+    the downgrade silent, and the peer would have no way to notice its session
+    is weaker than intended. Callers must opt in explicitly.
+    """
+
+
+class RetiredSignedPrekey(X3DHError):
+    """
+    Raised when a bundle's signed prekey predates the caller's minimum.
+
+    Peers that cached a bundle keep a valid signature over it after a rotation,
+    so the signature alone cannot distinguish a current prekey from a retired
+    one. The monotonic ``signed_prekey_id`` lets a client that has learned of a
+    rotation refuse the old one.
+    """
+
+
 class KeyConfirmationRequired(X3DHError):
     """
     Raised when the root key is requested before key confirmation.
@@ -163,6 +185,9 @@ class PreKeyBundle:
     signed_prekey_signature: bytes
     one_time_prekey: Optional[PublicKey] = None
     one_time_prekey_id: Optional[int] = None
+    #: Monotonic counter identifying the current signed prekey. Zero means
+    #: "not tracked", which leaves the signature as the only check.
+    signed_prekey_id: int = 0
 
     def __post_init__(self) -> None:
         if len(bytes(self.identity_key)) != _DH_LEN:
@@ -179,6 +204,12 @@ class PreKeyBundle:
             )
         if self.one_time_prekey is not None and len(bytes(self.one_time_prekey)) != _DH_LEN:
             raise InvalidHandshakeError('one-time prekey must be 32 bytes')
+        if isinstance(self.signed_prekey_id, bool) or \
+                not isinstance(self.signed_prekey_id, int) or \
+                self.signed_prekey_id < 0:
+            raise InvalidHandshakeError(
+                'signed_prekey_id must be a non-negative int'
+            )
 
 
 @dataclass(frozen=True)
@@ -605,6 +636,7 @@ class X3DH:
         identity_private: SigningKey,
         bundle: PreKeyBundle,
         associated_data: bytes = b'',
+        minimum_signed_prekey_id: Optional[int] = None,
     ) -> Tuple[X3DHState, HandshakeInit]:
         """
         Initiate a handshake as the initiator.
@@ -614,10 +646,20 @@ class X3DH:
         attacker raises :class:`InvalidSignatureError` instead of silently
         producing a shared secret the attacker also knows.
 
+        Args:
+            minimum_signed_prekey_id: refuse a bundle whose ``signed_prekey_id``
+                is older. A peer told that a rotation happened can require it,
+                which is the only way to retire a cached bundle: its signature
+                stays valid forever, because the identity key did not change.
+
         Returns:
             ``(state, init)``. ``init`` must be delivered to the responder and
             passed to :meth:`receive_handshake` unmodified; it carries the proof
             that the initiator owns the identity key it names.
+
+        Raises:
+            InvalidSignatureError: bundle authentication failed.
+            RetiredSignedPrekey: the bundle is older than the required minimum.
         """
         if not isinstance(identity_private, SigningKey):
             raise InvalidHandshakeError('identity_private must be a SigningKey')
@@ -627,6 +669,13 @@ class X3DH:
         # Authenticate the bundle first: nothing below this line may run on an
         # unverified bundle.
         self.verify_bundle(bundle)
+
+        if minimum_signed_prekey_id is not None and \
+                bundle.signed_prekey_id < minimum_signed_prekey_id:
+            raise RetiredSignedPrekey(
+                f'bundle signed_prekey_id {bundle.signed_prekey_id} is older '
+                f'than the required {minimum_signed_prekey_id}'
+            )
 
         ephemeral = PrivateKey.generate()
         dh_parts = self._initiator_dh_parts(identity_private, ephemeral, bundle)
@@ -703,6 +752,7 @@ class X3DH:
         identity_private: SigningKey,
         bundle: PreKeyBundle,
         associated_data: bytes = b'',
+        minimum_signed_prekey_id: Optional[int] = None,
     ) -> Tuple['X3DHSession', HandshakeInit]:
         """
         Initiate a handshake and get a session that is not yet usable.
@@ -712,7 +762,9 @@ class X3DH:
         this over :meth:`initiate_handshake` for anything that will send a
         message.
         """
-        state, init = self.initiate_handshake(identity_private, bundle, associated_data)
+        state, init = self.initiate_handshake(
+            identity_private, bundle, associated_data, minimum_signed_prekey_id
+        )
         session = X3DHSession(
             state,
             is_initiator=True,
@@ -799,6 +851,7 @@ class X3DHResponder:
     signed_prekey_private: PrivateKey
     prekey_store: PreKeyStore
     context: bytes = DEFAULT_CONTEXT
+    signed_prekey_id: int = 0
 
     def __post_init__(self) -> None:
         self._x3dh = X3DH()
@@ -813,9 +866,22 @@ class X3DHResponder:
     def identity_public(self) -> VerifyKey:
         return self.identity_private.verify_key
 
-    def publish_bundle(self) -> PreKeyBundle:
+    def publish_bundle(
+        self, *, allow_no_one_time_prekey: bool = False
+    ) -> PreKeyBundle:
         """
         Build the bundle to hand to an initiator.
+
+        Args:
+            allow_no_one_time_prekey: permit returning a bundle with no
+                one-time prekey. That handshake is the 3-DH variant, which works
+                but has **no forward secrecy**, so it is opt-in rather than the
+                default. A caller that accepts the downgrade is expected to
+                record that it did.
+
+        Raises:
+            PrekeyPoolExhausted: the pool is empty and the caller did not opt in
+                to the weaker variant.
 
         Publication does not consume a one-time prekey: the handshake may never
         arrive, and consuming here would silently shrink the pool. The atomic
@@ -827,12 +893,19 @@ class X3DHResponder:
         :mod:`src.crypto.prekey_store`.
         """
         candidate = self.prekey_store.peek_any()
+        if candidate is None and not allow_no_one_time_prekey:
+            raise PrekeyPoolExhausted(
+                'no one-time prekeys available; replenish the pool, or pass '
+                'allow_no_one_time_prekey=True to accept a session without '
+                'forward secrecy'
+            )
         return PreKeyBundle(
             identity_key=self.identity_public,
             signed_prekey=self._signed_prekey_public,
             signed_prekey_signature=self._signed_prekey_signature,
             one_time_prekey=None if candidate is None else candidate.public_key,
             one_time_prekey_id=None if candidate is None else candidate.key_id,
+            signed_prekey_id=self.signed_prekey_id,
         )
 
     def respond(

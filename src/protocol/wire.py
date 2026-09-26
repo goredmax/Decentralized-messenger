@@ -244,6 +244,7 @@ def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
         payload.append(0x01)
         payload += bytes(bundle.one_time_prekey)
         payload += encode_varint(bundle.one_time_prekey_id)
+    payload += encode_varint(bundle.signed_prekey_id)
     return _encode_frame(KIND_PREKEY_BUNDLE, bytes(payload))
 
 
@@ -258,7 +259,7 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
     _decode_header(data, (KIND_PREKEY_BUNDLE,))
     payload = _extract_payload(data, 0)
 
-    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1
+    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
             f'bundle payload of {len(payload)} bytes, minimum {expected_min}'
@@ -283,6 +284,8 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
         if one_time_prekey_id > _UINT64_MAX:
             raise InvalidVarint('one_time_prekey_id out of range')
 
+    signed_prekey_id, offset = decode_varint(payload, offset)
+
     if offset != len(payload):
         raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
 
@@ -293,6 +296,7 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
             signed_prekey_signature=signature,
             one_time_prekey=one_time_prekey,
             one_time_prekey_id=one_time_prekey_id,
+            signed_prekey_id=signed_prekey_id,
         )
     except BadSignatureError as exc:  # pragma: no cover - guarded above
         raise InvalidField('malformed key material') from exc

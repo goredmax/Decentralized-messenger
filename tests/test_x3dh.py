@@ -14,6 +14,7 @@ from src.crypto.x3dh import (
     X25519_F,
     X3DHResponder,
     InvalidKeyError,
+    PrekeyPoolExhausted,
     PreKeyBundle,
 )
 
@@ -95,6 +96,10 @@ class TestAgreement:
         X3DH.verify_bundle(bundle)
 
     def test_bundle_without_prekeys_is_published_without_one(self):
+        """
+        An empty pool refuses by default and only yields a 3-DH bundle on an
+        explicit opt-in, so the loss of forward secrecy is never silent.
+        """
         x3dh = X3DH()
         identity_private, _ = x3dh.generate_identity_keys()
         spk_private, _, _ = x3dh.generate_signed_prekey(identity_private)
@@ -103,10 +108,36 @@ class TestAgreement:
             signed_prekey_private=spk_private,
             prekey_store=InMemoryPreKeyStore(),
         )
-        bundle = responder.publish_bundle()
+        with pytest.raises(PrekeyPoolExhausted):
+            responder.publish_bundle()
+
+        bundle = responder.publish_bundle(allow_no_one_time_prekey=True)
         assert bundle.one_time_prekey is None
         assert bundle.one_time_prekey_id is None
         X3DH.verify_bundle(bundle)
+
+    def test_opted_in_bundle_yields_three_dh_session(self):
+        """The downgrade is real, and it really is the 3-DH variant."""
+        x3dh = X3DH()
+        identity_private, _ = x3dh.generate_identity_keys()
+        spk_private, _, _ = x3dh.generate_signed_prekey(identity_private)
+        responder = X3DHResponder(
+            identity_private=identity_private,
+            signed_prekey_private=spk_private,
+            prekey_store=InMemoryPreKeyStore(),
+        )
+        alice_private, _ = x3dh.generate_identity_keys()
+        session, init = x3dh.begin(
+            alice_private, responder.publish_bundle(allow_no_one_time_prekey=True)
+        )
+        responder_session = responder.respond(init)
+        session.verify_key_confirmation(responder_session.make_key_confirmation())
+        assert session.one_time_prekey_id is None
+        assert session.root_key == responder_session.root_key
+
+    def test_signed_prekey_id_is_published(self):
+        _, responder, _, _ = make_responder()
+        assert responder.publish_bundle().signed_prekey_id == 0
 
 
 class TestKeyDerivation:

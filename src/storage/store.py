@@ -195,6 +195,27 @@ class PersistentPreKeyStore(PreKeyStore):
         with self._lock:
             return key_id in self._used
 
+    def replenish(self, low_water_mark: int, target: Optional[int] = None) -> int:
+        """
+        Top the pool up, generating and persisting new keys as needed.
+
+        Cheap to call after every handshake: it does nothing while the pool is
+        at or above ``low_water_mark``.
+        """
+        from ..crypto.prekey_store import MAX_PREKEYS, make_one_time_prekey
+        if low_water_mark < 0:
+            raise ValueError('low_water_mark must be non-negative')
+        target = low_water_mark if target is None else target
+        if target < low_water_mark:
+            raise ValueError('target must be at least low_water_mark')
+        if target > MAX_PREKEYS:
+            raise ValueError(f'target exceeds the {MAX_PREKEYS} limit')
+        added = 0
+        while self.count() < target:
+            self.put(make_one_time_prekey())
+            added += 1
+        return added
+
     @property
     def epoch(self) -> int:
         """Current epoch, for a caller that wants to anchor it externally."""
@@ -216,6 +237,7 @@ class IdentityStore:
         self._lock = threading.Lock()
         self._identity: Optional[SigningKey] = None
         self._signed_prekey: Optional[PrivateKey] = None
+        self._signed_prekey_id: int = 0
         self._epoch = 0
         self._load()
 
@@ -236,6 +258,7 @@ class IdentityStore:
             self._signed_prekey = PrivateKey(
                 _unb64(document['signed_prekey'], 'signed prekey')
             )
+        self._signed_prekey_id = int(document.get('signed_prekey_id') or 0)
 
     def _flush(self) -> None:
         document = {}
@@ -243,6 +266,7 @@ class IdentityStore:
             document['identity'] = _b64(bytes(self._identity))
         if self._signed_prekey is not None:
             document['signed_prekey'] = _b64(bytes(self._signed_prekey))
+            document['signed_prekey_id'] = self._signed_prekey_id
         self._epoch += 1
         self._container.store(
             json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
@@ -255,20 +279,35 @@ class IdentityStore:
                 raise StorageError('identity already initialised')
             self._identity = SigningKey.generate()
             self._signed_prekey = PrivateKey.generate()
+            self._signed_prekey_id = 1
             self._flush()
 
-    def rotate(self) -> None:
+    def rotate(self) -> int:
         """
         Replace the signed prekey, keeping the identity key.
 
-        Peers that fetched the old bundle will be refused, which is the point:
-        it is how a leaked prekey is retired.
+        Peers that fetched the old bundle keep a valid signature over it, since
+        the identity key did not change. Retiring it therefore needs the
+        monotonic ``signed_prekey_id`` published in the new bundle, and a peer
+        that requires a minimum id. This method returns the new id.
+
+        Returns:
+            The new ``signed_prekey_id``.
         """
         with self._lock:
             if self._identity is None:
                 raise StorageError('identity not initialised')
             self._signed_prekey = PrivateKey.generate()
+            self._signed_prekey_id += 1
             self._flush()
+            return self._signed_prekey_id
+
+    @property
+    def signed_prekey_id(self) -> int:
+        with self._lock:
+            if self._signed_prekey is None:
+                raise StorageError('identity not initialised')
+            return self._signed_prekey_id
 
     @property
     def identity_key(self) -> SigningKey:

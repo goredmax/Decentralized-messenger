@@ -39,6 +39,11 @@ class OneTimePreKeyAlreadyUsed(PreKeyStoreError):
     """
 
 
+#: Ceiling on pool size, so a corrupt or hostile file cannot make a store
+#: allocate without bound.
+MAX_PREKEYS = 100_000
+
+
 @dataclass(frozen=True)
 class OneTimePreKey:
     """A single one-time prekey pair."""
@@ -102,6 +107,33 @@ class PreKeyStore(abc.ABC):
         """Convenience helper to seed a batch of prekeys."""
         for key in keys:
             self.put(key)
+
+    def replenish(self, low_water_mark: int, target: int = None) -> int:
+        """
+        Top the pool up to ``target`` keys, generating new ones as needed.
+
+        Does nothing while the pool is at or above ``low_water_mark``, so it is
+        cheap to call after every handshake.
+
+        Returns:
+            How many keys were added.
+
+        Raises:
+            ValueError: the arguments are inconsistent, or ``target`` exceeds
+                the implementation limit.
+        """
+        if low_water_mark < 0:
+            raise ValueError('low_water_mark must be non-negative')
+        target = low_water_mark if target is None else target
+        if target < low_water_mark:
+            raise ValueError('target must be at least low_water_mark')
+        if target > MAX_PREKEYS:
+            raise ValueError(f'target exceeds the {MAX_PREKEYS} limit')
+        added = 0
+        while self.count() < target:
+            self.put(make_one_time_prekey())
+            added += 1
+        return added
 
 
 class InMemoryPreKeyStore(PreKeyStore):
