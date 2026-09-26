@@ -44,6 +44,7 @@ from ..crypto.x3dh import (
     PreKeyBundle,
 )
 from ..crypto.key_management import identity_public_x25519
+from ..crypto.pq import PQError, load_public_key as load_pq_public_key
 from nacl.exceptions import BadSignatureError
 from nacl.public import PublicKey
 from nacl.signing import VerifyKey
@@ -58,16 +59,23 @@ from .padding import DEFAULT_PROFILE, PaddingProfile
 #: version governs key derivation, this one governs byte layout. A session
 #: survives a wire format change.
 #:
-#: Version 2 added length hiding. A ratchet frame now carries a varint length
-#: for its ciphertext followed by random fill, and the plaintext inside the AEAD
-#: carries a varint length followed by random fill. Version 1 frames are refused
-#: with :class:`UnsupportedVersion` rather than decoded, which matters more than
-#: usual here: a v1 plaintext has no length prefix, so unpadding one would read
-#: its first byte as a length and could return a plausible-looking fragment
-#: instead of failing. Inside the AEAD that prefix cannot be forged by an
-#: attacker, so the only way to reach that state is a version mismatch -- which
-#: is exactly what the version byte is for.
-WIRE_VERSION = 2
+#: Version 3 added post-quantum support. A prekey bundle carries a one-time
+#: ML-KEM-768 encapsulation key and its id; an initial handshake carries the
+#: matching 1088-byte ciphertext and its id, both inside the initiator's signed
+#: transcript. Version 1 and 2 bundles are refused with :class:`UnsupportedVersion`
+#: rather than decoded, which matters more than usual here: a v1 plaintext has
+#: no length prefix, so unpadding one would read its first byte as a length and
+#: could return a plausible-looking fragment instead of failing. Inside the AEAD
+#: that prefix cannot be forged by an attacker, so the only way to reach that
+#: state is a version mismatch -- which is exactly what the version byte is for.
+WIRE_VERSION = 3
+
+#: Post-quantum field widths, from src.crypto.pq. Duplicated as local names
+#: rather than imported because this module's rule is that a decoder pins its own
+#: expected sizes: an imported constant that changed would change what the
+#: decoder accepts, and the point of the check is to notice that the wire moved.
+PQ_PUBLIC_KEY_LEN = 1184
+PQ_CIPHERTEXT_LEN = 1088
 
 KEY_LEN = 32
 SIG_LEN = 64
@@ -250,6 +258,11 @@ def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
 
     The caller is responsible for having authenticated the bundle; encoding
     proves nothing.
+
+    The post-quantum encapsulation key is 1184 bytes, so a bundle with one is
+    about 1.4 KiB. That is the price of the property, on every handshake, and it
+    is worth stating as a size rather than leaving it to be discovered in a
+    profile.
     """
     payload = bytearray()
     payload += bytes(bundle.identity_key)
@@ -262,6 +275,12 @@ def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
         payload += bytes(bundle.one_time_prekey)
         payload += encode_varint(bundle.one_time_prekey_id)
     payload += encode_varint(bundle.signed_prekey_id)
+    if bundle.pq_prekey is None:
+        payload.append(0x00)
+    else:
+        payload.append(0x01)
+        payload += bundle.pq_prekey.public_bytes_raw()
+        payload += encode_varint(bundle.pq_prekey_id)
     return _encode_frame(KIND_PREKEY_BUNDLE, bytes(payload))
 
 
@@ -272,11 +291,13 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
     Raises:
         WireError: on any malformation. The returned bundle is not
             authenticated; call ``X3DH.verify_bundle`` on it.
+        InvalidField: the post-quantum key is present but not a usable
+            ML-KEM-768 encapsulation key.
     """
     _decode_header(data, (KIND_PREKEY_BUNDLE,))
     payload = _extract_payload(data, 0)
 
-    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1
+    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
             f'bundle payload of {len(payload)} bytes, minimum {expected_min}'
@@ -303,6 +324,30 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
 
     signed_prekey_id, offset = decode_varint(payload, offset)
 
+    has_pq = payload[offset]
+    offset += 1
+    if has_pq not in (0x00, 0x01):
+        raise InvalidField(f'pq_prekey flag must be 0 or 1, got {has_pq}')
+
+    pq_prekey = None
+    pq_prekey_id = None
+    if has_pq:
+        raw, offset = _read_exact(
+            payload, offset, PQ_PUBLIC_KEY_LEN, 'pq_prekey'
+        )
+        # Loaded through the pq module, which checks the length and the type.
+        # A DER SPKI would be the wrong choice here: load_der_public_key accepts
+        # an Ed25519 or X25519 SPKI and returns that type instead, so a bundle
+        # carrying a valid key of the wrong algorithm would decode into an
+        # object that looks like a key and is not one.
+        try:
+            pq_prekey = load_pq_public_key(raw)
+        except PQError as exc:
+            raise InvalidField(f'pq_prekey is not usable: {exc}') from exc
+        pq_prekey_id, offset = decode_varint(payload, offset)
+        if pq_prekey_id > _UINT64_MAX:
+            raise InvalidVarint('pq_prekey_id out of range')
+
     if offset != len(payload):
         raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
 
@@ -314,6 +359,8 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
             one_time_prekey=one_time_prekey,
             one_time_prekey_id=one_time_prekey_id,
             signed_prekey_id=signed_prekey_id,
+            pq_prekey=pq_prekey,
+            pq_prekey_id=pq_prekey_id,
         )
     except BadSignatureError as exc:  # pragma: no cover - guarded above
         raise InvalidField('malformed key material') from exc
@@ -331,6 +378,10 @@ def encode_handshake_init(init: HandshakeInit) -> bytes:
     derives it from ``identity_key`` and the initiator's signature covers the
     derived value, so putting it on the wire would only create a second copy
     that can disagree with the first.
+
+    The post-quantum ciphertext is transmitted, because the responder has no
+    other way to learn it. It is inside the initiator's signed transcript, so it
+    cannot be swapped for one the attacker generated itself.
     """
     payload = bytearray()
     payload += bytes(init.identity_key)
@@ -341,6 +392,12 @@ def encode_handshake_init(init: HandshakeInit) -> bytes:
     else:
         payload.append(0x01)
         payload += encode_varint(init.one_time_prekey_id)
+    if init.pq_ciphertext is None:
+        payload.append(0x00)
+    else:
+        payload.append(0x01)
+        payload += init.pq_ciphertext
+        payload += encode_varint(init.pq_prekey_id)
     return _encode_frame(KIND_HANDSHAKE_INIT, bytes(payload))
 
 
@@ -350,11 +407,13 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
 
     Raises:
         WireError: on any malformation.
+        InvalidField: the post-quantum ciphertext is present but the wrong
+            length for ML-KEM-768.
     """
     _decode_header(data, (KIND_HANDSHAKE_INIT,))
     payload = _extract_payload(data, 0)
 
-    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1
+    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
             f'handshake payload of {len(payload)} bytes, minimum {expected_min}'
@@ -374,6 +433,22 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
     if has_opk:
         one_time_prekey_id, offset = decode_varint(payload, offset)
 
+    has_pq = payload[offset]
+    offset += 1
+    if has_pq not in (0x00, 0x01):
+        raise InvalidField(f'pq_ciphertext flag must be 0 or 1, got {has_pq}')
+
+    pq_ciphertext = None
+    pq_prekey_id = None
+    if has_pq:
+        raw, offset = _read_exact(
+            payload, offset, PQ_CIPHERTEXT_LEN, 'pq_ciphertext'
+        )
+        pq_ciphertext = raw
+        pq_prekey_id, offset = decode_varint(payload, offset)
+        if pq_prekey_id > _UINT64_MAX:
+            raise InvalidVarint('pq_prekey_id out of range')
+
     if offset != len(payload):
         raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
 
@@ -387,14 +462,21 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
         # InvalidField.
         raise InvalidField('identity_key is not a usable Ed25519 point') from exc
 
-    return HandshakeInit(
-        identity_key=verify_key,
-        # Derived, never transmitted: a tampered copy cannot be substituted.
-        identity_key_x25519=derived,
-        ephemeral_key=PublicKey(ephemeral_key),
-        signature=signature,
-        one_time_prekey_id=one_time_prekey_id,
-    )
+    try:
+        return HandshakeInit(
+            identity_key=verify_key,
+            # Derived, never transmitted: a tampered copy cannot be substituted.
+            identity_key_x25519=derived,
+            ephemeral_key=PublicKey(ephemeral_key),
+            signature=signature,
+            one_time_prekey_id=one_time_prekey_id,
+            pq_ciphertext=pq_ciphertext,
+            pq_prekey_id=pq_prekey_id,
+        )
+    except PQError as exc:
+        # Length disagreement between the encoder's constant and the dataclass's
+        # check, or a hostile id. Either way the frame is unusable.
+        raise InvalidField(f'malformed handshake: {exc}') from exc
 
 
 # ---------------------------------------------------------------------------

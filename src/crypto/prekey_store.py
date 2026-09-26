@@ -285,3 +285,23 @@ def make_one_time_prekey(key_id: Optional[int] = None) -> OneTimePreKey:
         private_key=private_key,
         public_key=private_key.public_key,
     )
+
+
+def stocked_prekey_store(count: int = 4) -> InMemoryPreKeyStore:
+    """
+    A pool of ``count`` freshly generated one-time prekeys, keyed 0..count-1.
+
+    For a caller that needs a usable pool and has none yet -- a first run, or a
+    test. A long-lived client wants
+    :class:`~src.storage.store.PersistentPreKeyStore` instead, because a pool
+    that lives in memory is empty after a restart, and an empty pool means the
+    only reachable handshake is the 3-DH variant with no forward secrecy.
+    """
+    if count < 1:
+        raise PreKeyStoreError(
+            f'a pool needs at least one prekey, asked for {count}'
+        )
+    store = InMemoryPreKeyStore()
+    for key_id in range(count):
+        store.put(make_one_time_prekey(key_id=key_id))
+    return store

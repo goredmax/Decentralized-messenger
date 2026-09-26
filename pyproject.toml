@@ -32,7 +32,7 @@ classifiers = [
 # Development dependencies are deliberately not duplicated into
 # optional-dependencies: requirements-dev.in and requirements-dev.lock remain
 # their only source of truth, and CI installs from the lock.
-dependencies = ["PyNaCl>=1.5,<2"]
+dependencies = ["PyNaCl>=1.5,<2", "cryptography>=42,<51"]
 
 [tool.setuptools]
 # An explicit list, not discovery: a directory someone drops into src/ and

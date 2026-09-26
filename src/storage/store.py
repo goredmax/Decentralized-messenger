@@ -36,6 +36,15 @@ from ..crypto.prekey_store import (
     PreKeyStore,
     PreKeyStoreError,
 )
+from ..crypto.pq import (
+    NoSuchPQPreKey,
+    PQError,
+    PQOneTimePreKey,
+    PQPreKeyAlreadyUsed,
+    PQPreKeyExhausted,
+    PQPreKeyStore,
+    generate_prekey as generate_pq_prekey,
+)
 from .container import Container, StorageError
 
 #: Refuse to write a pool larger than this, so a corrupt file cannot make the
@@ -258,6 +267,201 @@ class PersistentPreKeyStore(PreKeyStore):
     @property
     def epoch(self) -> int:
         """Current epoch, for a caller that wants to anchor it externally."""
+        with self._lock:
+            return self._epoch
+
+
+class PersistentPQPreKeyStore(PQPreKeyStore):
+    """
+    A post-quantum prekey pool behind a container.
+
+    The same properties as :class:`PersistentPreKeyStore`, for the same reasons:
+    sealed on disk, single-use enforced by an atomic consume, and **not** atomic
+    across processes, because there are no file locks. Stated rather than
+    implied, exactly as in the module docstring.
+
+    Each key is stored as its 64-byte serialised form. That is the whole private
+    key, so this container is as sensitive as the identity one and is treated
+    the same way.
+    """
+
+    def __init__(self, container: Container, minimum_epoch: Optional[int] = None):
+        self._container = container
+        self._minimum_epoch = minimum_epoch
+        self._lock = threading.Lock()
+        self._prekeys: Dict[int, 'PQOneTimePreKey'] = {}
+        self._consumed: set = set()
+        self._reserved: set = set()
+        self._epoch = 0
+        self._load()
+
+    def _load(self) -> None:
+        epoch, raw = self._container.load(minimum_epoch=self._minimum_epoch)
+        self._epoch = epoch
+        if not raw:
+            return
+        try:
+            document = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise StorageError(
+                'post-quantum prekey payload is not valid JSON'
+            ) from exc
+        entries = document.get('prekeys')
+        if not isinstance(entries, dict):
+            raise StorageError(
+                'post-quantum prekey payload has no prekeys object'
+            )
+        for key_id, encoded in entries.items():
+            try:
+                numeric = int(key_id)
+            except (TypeError, ValueError) as exc:
+                raise StorageError(
+                    f'post-quantum prekey id {key_id!r} is not an integer'
+                ) from exc
+            try:
+                self._prekeys[numeric] = PQOneTimePreKey.from_seed(
+                    numeric, _unb64(encoded, 'post-quantum prekey')
+                )
+            except PQError as exc:
+                raise StorageError(
+                    f'post-quantum prekey {numeric} could not be restored'
+                ) from exc
+        consumed = document.get('consumed') or []
+        if not isinstance(consumed, list):
+            raise StorageError('consumed must be a list of prekey ids')
+        for value in consumed:
+            try:
+                self._consumed.add(int(value))
+            except (TypeError, ValueError) as exc:
+                raise StorageError(
+                    f'consumed entry {value!r} is not an integer'
+                ) from exc
+
+    def _flush(self) -> None:
+        document = {
+            'prekeys': {
+                str(key_id): _b64(prekey.seed)
+                for key_id, prekey in sorted(self._prekeys.items())
+            },
+            # Spent ids are recorded, not just deleted. Without them a rolled
+            # back file would make an already-used prekey available again, and a
+            # prekey that is used twice is a prekey whose contribution is
+            # recoverable from two handshakes -- which is the entire property
+            # this pool exists to provide.
+            'consumed': sorted(self._consumed),
+        }
+        self._epoch += 1
+        self._container.store(
+            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+        )
+
+    def put(self, prekey: 'PQOneTimePreKey') -> None:
+        with self._lock:
+            if not isinstance(prekey, PQOneTimePreKey):
+                raise StorageError('put expects a PQOneTimePreKey')
+            if prekey.key_id in self._prekeys or prekey.key_id in self._consumed:
+                raise StorageError(
+                    f'post-quantum prekey {prekey.key_id} is already known'
+                )
+            self._prekeys[prekey.key_id] = prekey
+            self._flush()
+
+    def consume(self, key_id: int) -> 'PQOneTimePreKey':
+        with self._lock:
+            if key_id in self._consumed:
+                raise PQPreKeyAlreadyUsed(
+                    f'post-quantum prekey {key_id} was already used; accepting '
+                    f'it would destroy the forward secrecy the ML-KEM '
+                    f'contribution exists to provide'
+                )
+            try:
+                prekey = self._prekeys.pop(key_id)
+            except KeyError:
+                raise NoSuchPQPreKey(
+                    f'unknown post-quantum prekey {key_id}'
+                ) from None
+            self._consumed.add(key_id)
+            self._reserved.discard(key_id)
+            self._flush()
+            return prekey
+
+    def peek(self, key_id: int) -> 'PQOneTimePreKey':
+        with self._lock:
+            if key_id in self._consumed:
+                raise NoSuchPQPreKey(
+                    f'post-quantum prekey {key_id} was already used'
+                )
+            try:
+                return self._prekeys[key_id]
+            except KeyError:
+                raise NoSuchPQPreKey(
+                    f'unknown post-quantum prekey {key_id}'
+                ) from None
+
+    def peek_any(self) -> Optional['PQOneTimePreKey']:
+        with self._lock:
+            for key_id, prekey in self._prekeys.items():
+                if key_id not in self._reserved:
+                    return prekey
+            return None
+
+    def reserve_next(self) -> Optional['PQOneTimePreKey']:
+        with self._lock:
+            for key_id, prekey in self._prekeys.items():
+                if key_id not in self._reserved:
+                    self._reserved.add(key_id)
+                    return prekey
+            return None
+
+    def release(self, key_id: int) -> None:
+        with self._lock:
+            if key_id in self._consumed:
+                raise PQPreKeyAlreadyUsed(
+                    f'post-quantum prekey {key_id} was already used'
+                )
+            if key_id not in self._prekeys:
+                raise NoSuchPQPreKey(
+                    f'unknown post-quantum prekey {key_id}'
+                )
+            self._reserved.discard(key_id)
+
+    def reserved_ids(self) -> List[int]:
+        with self._lock:
+            return sorted(self._reserved)
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._prekeys)
+
+    def available_ids(self) -> List[int]:
+        with self._lock:
+            return sorted(self._prekeys)
+
+    def was_consumed(self, key_id: int) -> bool:
+        with self._lock:
+            return key_id in self._consumed
+
+    def replenish(self, low_water_mark: int, target: int = None) -> int:
+        target = target if target is not None else low_water_mark * 2
+        if target <= 0:
+            raise PQPreKeyExhausted(
+                'a replenishment target must be positive'
+            )
+        with self._lock:
+            added = 0
+            while len(self._prekeys) < target:
+                candidate = generate_pq_prekey()
+                if candidate.key_id in self._prekeys or \
+                        candidate.key_id in self._consumed:
+                    continue
+                self._prekeys[candidate.key_id] = candidate
+                added += 1
+            if added:
+                self._flush()
+            return added
+
+    @property
+    def epoch(self) -> int:
         with self._lock:
             return self._epoch
 

@@ -58,17 +58,42 @@ class TestHkdf:
         assert X3DH._hkdf_expand(prk, info, 32) == reference
 
     def test_master_key_matches_reference_hkdf(self):
-        """The full X3DH KDF step, end to end, against ``cryptography``."""
+        """
+        The full X3DH KDF step, end to end, against ``cryptography``.
+
+        The reference input is written out here rather than taken from the
+        implementation, because a test that recomputes the thing it is checking
+        with the same helper checks nothing. The label prefix is part of the
+        construction since PQXDH was added.
+        """
+        from src.crypto.x3dh import (
+            LABEL_EK_IK,
+            LABEL_EK_OPK,
+            LABEL_EK_SPK,
+            LABEL_IK_SPK,
+            LABEL_KEM,
+            DhPart,
+        )
+
+        labels = [LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK]
         for _ in range(20):
-            parts = [nacl.utils.random(32) for _ in range(4)]
+            parts = [
+                DhPart(label, nacl.utils.random(32))
+                for label in labels + [LABEL_KEM]
+            ][:5]
             context = b'DecentralizedMessenger-X3DH-v1'
             ours = X3DH.derive_master_key(parts, context=context)
+
+            framed = b''.join(
+                len(part.label).to_bytes(4, 'big') + part.label + part.value
+                for part in parts
+            )
             theirs = HKDF(
                 algorithm=hashes.SHA256(),
                 length=32,
                 salt=b'\x00' * 32,
                 info=context,
-            ).derive(b'\xff' * 32 + b''.join(parts))
+            ).derive(b'\xff' * 32 + framed)
             assert ours == theirs
 
 

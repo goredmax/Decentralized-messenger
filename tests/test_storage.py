@@ -35,6 +35,7 @@ from src.storage.container import (
 from src.storage.store import (
     IdentityStore,
     PeerDirectory,
+    PersistentPQPreKeyStore,
     PersistentPreKeyStore,
     SessionStore,
     peer_id,
@@ -747,7 +748,8 @@ class TestEndToEndWithStorage:
     def test_handshake_survives_a_restart(self, tmp_path):
         """
         The point of persisting the pool: after a restart there are prekeys
-        left, so the handshake is still the 4-DH variant with forward secrecy.
+        left, so the handshake still has forward secrecy -- and still carries an
+        ML-KEM contribution, which is the same argument one level up.
         """
         container_path = str(tmp_path / 'prekeys.bin')
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
@@ -756,24 +758,35 @@ class TestEndToEndWithStorage:
             Container.create(str(tmp_path / 'identity.bin'), PASSWORD, kdf_params=FAST)
         )
         identity.initialise()
+        pq_store = PersistentPQPreKeyStore(
+            Container.create(
+                str(tmp_path / 'pqkeys.bin'), PASSWORD, kdf_params=FAST
+            )
+        )
 
         x3dh = X3DH()
         for index in range(4):
             store.put(x3dh.generate_one_time_prekey(key_id=2000 + index))
+        pq_store.replenish(0, 4)
 
         from src.crypto.x3dh import X3DHResponder
         responder = X3DHResponder(
             identity_private=identity.identity_key,
             signed_prekey_private=identity.signed_prekey_private,
             prekey_store=store,
+            pq_prekey_store=pq_store,
         )
         bundle = responder.publish_bundle()
         assert bundle.one_time_prekey_id is not None
+        assert bundle.pq_prekey_id is not None
 
         # "Restart": drop every object and reopen from disk.
-        del responder, store, identity
+        del responder, store, identity, pq_store
         reopened_prekeys = PersistentPreKeyStore(
             Container.open(container_path, PASSWORD)
+        )
+        reopened_pq = PersistentPQPreKeyStore(
+            Container.open(str(tmp_path / 'pqkeys.bin'), PASSWORD)
         )
         reopened_identity = IdentityStore(
             Container.open(str(tmp_path / 'identity.bin'), PASSWORD)
@@ -782,6 +795,7 @@ class TestEndToEndWithStorage:
             identity_private=reopened_identity.identity_key,
             signed_prekey_private=reopened_identity.signed_prekey_private,
             prekey_store=reopened_prekeys,
+            pq_prekey_store=reopened_pq,
         )
 
         alice_private, _ = x3dh.generate_identity_keys()
@@ -789,10 +803,15 @@ class TestEndToEndWithStorage:
         responder_session = responder.respond(init)
         session.verify_key_confirmation(responder_session.make_key_confirmation())
 
-        # The handshake used a persisted one-time prekey, so it is the 4-DH
-        # variant: after a restart this session still has forward secrecy.
+        # The handshake used a persisted one-time prekey and a persisted
+        # post-quantum one, so after a restart this session still has forward
+        # secrecy and is still post-quantum.
         assert session.one_time_prekey_id is not None
+        assert session.pq_prekey_id is not None
+        assert session.is_post_quantum
         assert session.root_key == responder_session.root_key
+        # And the post-quantum prekey survived as the same key, not a fresh one.
+        assert reopened_pq.was_consumed(session.pq_prekey_id)
 
         # And the pool shrank by exactly that key, durably.
         assert reopened_prekeys.was_consumed(session.one_time_prekey_id)

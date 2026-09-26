@@ -32,6 +32,8 @@ from src.protocol.wire import (
 )
 
 
+from src.crypto.pq import stocked_pq_store
+from src.storage.container import Container
 def build(prekey_count=3, signed_prekey_id=0):
     x3dh = X3DH()
     identity_private, _ = x3dh.generate_identity_keys()
@@ -43,6 +45,7 @@ def build(prekey_count=3, signed_prekey_id=0):
         identity_private=identity_private,
         signed_prekey_private=spk_private,
         prekey_store=store,
+        pq_prekey_store=stocked_pq_store(),
         signed_prekey_id=signed_prekey_id,
     )
     return x3dh, responder, store
@@ -357,7 +360,6 @@ class TestRotationWorkflow:
         Uses the persistent IdentityStore so the counter survives a restart,
         which is the whole point of storing it.
         """
-        from src.storage.container import Container
         from src.storage.store import IdentityStore, PersistentPreKeyStore
 
         kdf = __import__(
@@ -378,6 +380,7 @@ class TestRotationWorkflow:
                 identity_private=identity.identity_key,
                 signed_prekey_private=identity.signed_prekey_private,
                 prekey_store=store,
+                pq_prekey_store=stocked_pq_store(),
                 signed_prekey_id=identity.signed_prekey_id,
             )
 
@@ -404,6 +407,7 @@ class TestRotationWorkflow:
             identity_private=reopened.identity_key,
             signed_prekey_private=reopened.signed_prekey_private,
             prekey_store=store,
+            pq_prekey_store=stocked_pq_store(),
             signed_prekey_id=reopened.signed_prekey_id,
         )
         session, init = x3dh.begin(

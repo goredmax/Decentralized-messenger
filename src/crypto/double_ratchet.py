@@ -52,7 +52,11 @@ MAX_SKIP = 1000
 # message permanently undecryptable.
 MAX_STORED_SKIPPED = 4 * MAX_SKIP
 
-PROTOCOL_VERSION = 2
+#: Session protocol version. Bumped to 3 for PQXDH: the root key a session
+#: starts from is now derived from an extra, labelled ML-KEM contribution, so a
+#: state written under version 2 would come back as a ratchet whose root key
+#: means something different. Such a state is refused rather than interpreted.
+PROTOCOL_VERSION = 3
 HKDF_INFO = b"WhisperRatchet-v2"
 
 NONCE_SIZE = 24  # XChaCha20-Poly1305 nonce

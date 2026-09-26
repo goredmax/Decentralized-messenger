@@ -18,6 +18,7 @@ import pytest
 from nacl.public import PrivateKey
 
 from src.crypto.prekey_store import InMemoryPreKeyStore
+from src.crypto.pq import InMemoryPQPreKeyStore, stocked_pq_store
 from src.crypto.x3dh import (
     X3DH,
     X3DHResponder,
@@ -29,6 +30,7 @@ from src.protocol.wire import (
     KIND_RATCHET_MESSAGE,
     KEY_LEN,
     MAX_FRAME_BYTES,
+    PQ_PUBLIC_KEY_LEN,
     WIRE_VERSION,
     FrameTooLarge,
     InvalidField,
@@ -62,15 +64,18 @@ def payload_offset(wire: bytes) -> int:
     return offset
 
 
-def publish(responder, with_one_time_prekey=True):
+def publish(responder, with_one_time_prekey=True, with_pq=True):
     """
-    Publish a bundle, opting in to the weaker variant when the pool is empty.
+    Publish a bundle, opting in to the weaker variant when a pool is empty.
 
-    An empty pool now refuses by default, so a test that means to exercise the
-    prekey-less encoding has to say so rather than get it by accident.
+    An empty pool refuses by default, so a test that means to exercise the
+    prekey-less encoding has to say so rather than get it by accident. Same for
+    the post-quantum key, and for the same reason: a bundle without one is a
+    session whose forward secrecy does not survive a break of X25519.
     """
     return responder.publish_bundle(
-        allow_no_one_time_prekey=not with_one_time_prekey
+        allow_no_one_time_prekey=not with_one_time_prekey,
+        allow_no_pq=not with_pq,
     )
 
 
@@ -85,6 +90,7 @@ def make_bundle(with_one_time_prekey=True):
         identity_private=identity_private,
         signed_prekey_private=spk_private,
         prekey_store=store,
+        pq_prekey_store=stocked_pq_store(),
     )
     return x3dh, responder
 
@@ -234,12 +240,57 @@ class TestPreKeyBundle:
             decode_prekey_bundle(bytes(wire))
 
     def test_flag_one_without_key_rejected(self):
+        """
+        A bundle that claims a one-time prekey and does not carry one is
+        refused.
+
+        Asserted against ``WireError`` rather than a subclass: the exact error
+        moved when the post-quantum fields were added, because the decoder now
+        runs further before it notices. The contract worth pinning is that a
+        truncated bundle is rejected at all -- a decoder that accepted one would
+        read a prekey out of the following field.
+        """
         _, responder = make_bundle(False)
-        wire = bytearray(encode_prekey_bundle(publish(responder, with_one_time_prekey=False)))
+        wire = bytearray(encode_prekey_bundle(
+            publish(responder, with_one_time_prekey=False)
+        ))
         base = payload_offset(bytes(wire))
         wire[base + 32 + 32 + 64] = 0x01
-        with pytest.raises(TruncatedFrame):
+        with pytest.raises(WireError):
             decode_prekey_bundle(bytes(wire))
+
+    def test_pq_flag_one_without_a_key_is_rejected(self):
+        """
+        The same for the post-quantum key.
+
+        The bundle here is published with an *empty* post-quantum pool, so the
+        flag really is at zero and the payload really is short. Flipping it to
+        one leaves a frame that claims 1184 bytes of key it does not carry, and
+        the decoder has to notice rather than read into the length prefix.
+        """
+        x3dh = X3DH()
+        identity_private, _ = x3dh.generate_identity_keys()
+        spk_private, _, _ = x3dh.generate_signed_prekey(identity_private)
+        store = InMemoryPreKeyStore()
+        store.put(x3dh.generate_one_time_prekey(key_id=1))
+        responder = X3DHResponder(
+            identity_private=identity_private,
+            signed_prekey_private=spk_private,
+            prekey_store=store,
+            pq_prekey_store=InMemoryPQPreKeyStore(),
+        )
+        frame = encode_prekey_bundle(
+            responder.publish_bundle(allow_no_pq=True)
+        )
+        length, offset = decode_varint(frame, 2)
+        assert length < PQ_PUBLIC_KEY_LEN
+        assert frame[offset + length - 1] == 0x00
+
+        payload = bytearray(frame[offset:offset + length])
+        payload[-1] = 0x01
+        tampered = frame[:2] + encode_varint(len(payload)) + bytes(payload)
+        with pytest.raises(WireError):
+            decode_prekey_bundle(tampered)
 
 
 class TestHandshakeInit:

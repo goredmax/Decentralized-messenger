@@ -56,13 +56,19 @@ def test_a_full_run_succeeds(capsys):
 
 def test_the_run_reports_the_prekey_it_spent(capsys):
     """
-    The one-time prekey is the whole reason the pool is persisted, so the demo
-    has to show it being spent. A line that said "authenticated the initiator"
-    without it would leave the forward-secrecy story unverified on screen.
+    The one-time prekeys are the whole reason the pools are persisted, so the
+    demo has to show them being spent. A line that said "authenticated the
+    initiator" without them would leave the forward-secrecy story unverified on
+    screen.
     """
     main(['--messages', '0'])
     output = capsys.readouterr().out
-    assert f'spent prekey 0, leaving {DEMO_PREKEYS - 1} in the pool' in output
+    assert 'spent prekey 0 and post-quantum prekey 0' in output
+    assert f'pools now hold {DEMO_PREKEYS - 1} and {DEMO_PREKEYS - 1}' in output
+    # And the post-quantum contribution is named, so the output does not imply
+    # the session is only as strong as X25519.
+    assert 'forward secrecy survives a future break of X25519' in output
+    assert 'ML-KEM-768' in output
 
 
 def test_the_run_reports_real_frame_lengths(capsys):
@@ -205,14 +211,18 @@ def test_the_prekey_pool_survives_and_shrinks(tmp_path, capsys):
     """
     directory = str(tmp_path / 'state')
     main(['--messages', '0', '--data-dir', directory, '--password', 'p'])
-    assert f'leaving {DEMO_PREKEYS - 1} in the pool' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    # The ids are random on the persistent path and 0-based on the in-memory
+    # one, so the line is checked by shape rather than by value.
+    assert 'spent prekey ' in output and 'and post-quantum prekey ' in output
+    assert f'pools now hold {DEMO_PREKEYS - 1} and {DEMO_PREKEYS - 1}' in output
 
     main(['--messages', '0', '--data-dir', directory, '--password', 'p'])
-    # No handshake ran, so the pool did not shrink further: it is the same
+    # No handshake ran, so neither pool shrank further: it is the same
     # conversation, not a new one.
     assert 'was found and reopened' in capsys.readouterr().out
 
-    # A third run is still the same conversation, and still has a pool.
+    # A third run is still the same conversation, and still has both pools.
     main(['--messages', '0', '--data-dir', directory, '--password', 'p'])
     assert 'was found and reopened' in capsys.readouterr().out
 

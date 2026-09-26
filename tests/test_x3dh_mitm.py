@@ -20,12 +20,19 @@ from src.crypto.prekey_store import (
 )
 from src.crypto.x3dh import (
     X3DH,
+    DhPart,
     HandshakeInit,
     InvalidHandshakeError,
     InvalidSignatureError,
+    LABEL_EK_IK,
+    LABEL_EK_OPK,
+    LABEL_EK_SPK,
+    LABEL_IK_SPK,
+    LABEL_KEM,
     PreKeyBundle,
     X3DHResponder,
 )
+from src.crypto.pq import decapsulate as pq_decapsulate, stocked_pq_store
 
 
 def make_responder(prekey_count=3):
@@ -42,6 +49,7 @@ def make_responder(prekey_count=3):
         identity_private=identity_private,
         signed_prekey_private=spk_private,
         prekey_store=store,
+        pq_prekey_store=stocked_pq_store(),
     )
     return x3dh, responder, store, identity_public
 
@@ -113,41 +121,82 @@ class TestBundleAuthentication:
         If the signature check is skipped, the attacker's own prekey produces
         exactly the key Alice derives, so the attacker reads the session. With
         the check in place the handshake is refused before any DH is computed.
+
+        The substituted bundle keeps the honest one-time and post-quantum
+        prekeys, so the only thing the attacker has to supply is the signed
+        prekey. That is the cheapest version of the attack and it still works
+        perfectly without the check -- which is the point of demonstrating it.
         """
         x3dh, responder, _, _ = make_responder()
         honest = responder.publish_bundle()
         _, alice_private, _ = make_initiator()
 
         attacker_spk_private = PrivateKey.generate()
+        # The post-quantum private half of the prekey the bundle advertises. The
+        # attacker publishes it, so it holds it.
+        attacker_pq_private = responder.pq_prekey_store.peek(
+            honest.pq_prekey_id
+        ).private_key
         tampered = PreKeyBundle(
             identity_key=honest.identity_key,
             signed_prekey=attacker_spk_private.public_key,
             signed_prekey_signature=honest.signed_prekey_signature,
+            one_time_prekey=honest.one_time_prekey,
+            one_time_prekey_id=honest.one_time_prekey_id,
+            pq_prekey=honest.pq_prekey,
+            pq_prekey_id=honest.pq_prekey_id,
         )
 
         # What Alice *would* have derived had the bundle not been authenticated.
         alice_ephemeral = PrivateKey.generate()
-        alice_parts = x3dh._initiator_dh_parts(
+        alice_parts, pq_ciphertext = x3dh._initiator_dh_parts(
             alice_private, alice_ephemeral, tampered
         )
 
-        # What the attacker derives from the same wire data.
+        # What the attacker derives from the same wire data. Note the ML-KEM
+        # secret comes from *decapsulating the ciphertext that went on the wire*,
+        # not from encapsulating again: encapsulation is randomised, so a second
+        # encapsulation would produce a different secret and the demonstration
+        # would be of nothing. The attacker can decapsulate because it published
+        # the prekey.
         from src.crypto.key_management import (
             identity_private_x25519,
             identity_public_x25519,
         )
         alice_ik_x = identity_private_x25519(alice_private).public_key
-        attacker_parts = (
-            x3dh._dh(attacker_spk_private, alice_ik_x),
-            x3dh._dh(alice_ephemeral, identity_public_x25519(honest.identity_key)),
-            x3dh._dh(alice_ephemeral, attacker_spk_private.public_key),
-        )
+        attacker_parts = [
+            DhPart(LABEL_IK_SPK,
+                   x3dh._dh(attacker_spk_private, alice_ik_x)),
+            DhPart(LABEL_EK_IK,
+                   x3dh._dh(alice_ephemeral,
+                            identity_public_x25519(honest.identity_key))),
+            DhPart(LABEL_EK_SPK,
+                   x3dh._dh(alice_ephemeral, attacker_spk_private.public_key)),
+        ]
+        if tampered.one_time_prekey is not None:
+            attacker_parts.append(DhPart(
+                LABEL_EK_OPK,
+                x3dh._dh(alice_ephemeral, tampered.one_time_prekey),
+            ))
+        if tampered.pq_prekey is not None:
+            attacker_parts.append(DhPart(
+                LABEL_KEM,
+                pq_decapsulate(attacker_pq_private, pq_ciphertext),
+            ))
+
+        assert alice_parts == tuple(attacker_parts)
+        assert len(alice_parts) == 5
+        assert alice_parts[-1].label == LABEL_KEM
+        # The keys are not merely the same parts, they are the same root key --
+        # which is what makes this an attack and not a curiosity.
         assert x3dh.derive_master_key(alice_parts) == \
             x3dh.derive_master_key(attacker_parts), (
             'test is not demonstrating the attack: keys differ'
         )
 
         # And the fixed code refuses the very same bundle.
+        with pytest.raises(InvalidSignatureError):
+            x3dh.verify_bundle(tampered)
         with pytest.raises(InvalidSignatureError):
             x3dh.initiate_handshake(alice_private, tampered)
 

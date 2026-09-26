@@ -220,6 +220,23 @@ class Session:
         return self._x3dh.one_time_prekey_id if self._x3dh is not None else None
 
     @property
+    def pq_prekey_id(self) -> Optional[int]:
+        """Which post-quantum prekey this handshake spent, if any."""
+        return self._x3dh.pq_prekey_id if self._x3dh is not None else None
+
+    @property
+    def is_post_quantum(self) -> bool:
+        """
+        Whether the root key this session runs on includes an ML-KEM
+        contribution.
+
+        False means the session's forward secrecy ends the day X25519 is broken.
+        Worth reporting rather than assuming, and worth recording for a session
+        that was accepted on an explicit downgrade.
+        """
+        return self._x3dh.is_post_quantum if self._x3dh is not None else False
+
+    @property
     def ratchet(self) -> DoubleRatchet:
         """
         The live Double Ratchet, created on first access.

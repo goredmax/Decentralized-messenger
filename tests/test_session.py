@@ -61,6 +61,7 @@ from src.protocol.wire import (
     encode_prekey_bundle,
 )
 
+from src.crypto.pq import stocked_pq_store
 PREKEYS = 5
 
 
@@ -78,6 +79,7 @@ def make_responder(prekeys: int = PREKEYS, signed_prekey_id: int = 1):
         identity_private=identity_private,
         signed_prekey_private=signed_prekey_private,
         prekey_store=store,
+        pq_prekey_store=stocked_pq_store(),
         signed_prekey_id=signed_prekey_id,
     )
     return responder, identity_public, store

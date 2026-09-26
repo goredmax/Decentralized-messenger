@@ -46,6 +46,7 @@ from typing import List, Optional, Tuple
 # Running the file directly puts examples/ on sys.path, not the repository root,
 # so the package would not be importable without an install. After
 # `pip install -e .` this branch is not taken.
+from src.storage.store import PersistentPQPreKeyStore
 if __package__ in (None, ''):  # pragma: no cover - depends on invocation
     sys.path.insert(
         0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,9 +60,12 @@ from src.crypto.double_ratchet import (  # noqa: E402
     IncompatibleSessionError,
 )
 from src.crypto.prekey_store import (  # noqa: E402
-    InMemoryPreKeyStore,
     PreKeyStore,
-    make_one_time_prekey,
+    stocked_prekey_store,
+)
+from src.crypto.pq import (  # noqa: E402
+    PQPreKeyStore,
+    stocked_pq_store,
 )
 from src.crypto.x3dh import X3DH, X3DHResponder  # noqa: E402
 from src.p2p.relay import Relay  # noqa: E402
@@ -171,18 +175,24 @@ def open_participant(name: str, directory: Optional[str],
 
     With no directory, keys are generated per process and thrown away, which is
     the right default for a demo: nothing is written that was not asked for.
-    With one, the identity, the signed prekey and the prekey pool are sealed in
-    containers, so a second run is the same person talking to the same person.
+    With one, the identity, the signed prekey and both prekey pools are sealed
+    in containers, so a second run is the same person talking to the same person.
+
+    Both pools matter for the same reason and are handled identically. A pool
+    that does not survive a restart is an empty pool, and an empty pool means
+    every later handshake either fails or is accepted without post-quantum
+    protection -- which is why the post-quantum pool is persisted rather than
+    quietly regenerated.
     """
     if directory is None:
         x3dh = X3DH()
         identity_private, _ = x3dh.generate_identity_keys()
-        prekeys = InMemoryPreKeyStore()
-        for key_id in range(DEMO_PREKEYS):
-            prekeys.put(make_one_time_prekey(key_id=key_id))
-        return Participant(name, EphemeralIdentity(
-            identity_private, PrivateKey.generate(), 1
-        ), prekeys)
+        return Participant(
+            name,
+            EphemeralIdentity(identity_private, PrivateKey.generate(), 1),
+            stocked_prekey_store(DEMO_PREKEYS),
+            stocked_pq_store(DEMO_PREKEYS),
+        )
 
     os.makedirs(directory, exist_ok=True)
     identity = IdentityStore(open_or_create(
@@ -191,12 +201,16 @@ def open_participant(name: str, directory: Optional[str],
     prekeys = PersistentPreKeyStore(open_or_create(
         os.path.join(directory, f'{name}-prekeys.bin'), password
     ))
+    pq_prekeys = PersistentPQPreKeyStore(open_or_create(
+        os.path.join(directory, f'{name}-pqkeys.bin'), password
+    ))
     if not identity_is_initialised(identity):
         identity.initialise()
     if prekeys.count() == 0:
-        for key_id in range(DEMO_PREKEYS):
-            prekeys.put(make_one_time_prekey(key_id=key_id))
-    return Participant(name, identity, prekeys)
+        prekeys.replenish(0, DEMO_PREKEYS)
+    if pq_prekeys.count() == 0:
+        pq_prekeys.replenish(0, DEMO_PREKEYS)
+    return Participant(name, identity, prekeys, pq_prekeys)
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +226,8 @@ class Participant:
     splitting them into two classes would hide that.
     """
 
-    def __init__(self, name: str, identity, prekeys: PreKeyStore):
+    def __init__(self, name: str, identity, prekeys: PreKeyStore,
+                 pq_prekeys: PQPreKeyStore):
         self.name = name
         self._identity = identity
         self.session: Optional[Session] = None
@@ -220,8 +235,14 @@ class Participant:
             identity_private=identity.identity_key,
             signed_prekey_private=identity.signed_prekey_private,
             prekey_store=prekeys,
+            pq_prekey_store=pq_prekeys,
             signed_prekey_id=identity.signed_prekey_id,
         )
+        self._pq_prekeys = pq_prekeys
+
+    @property
+    def pq_prekey_pool_size(self) -> int:
+        return self._pq_prekeys.count()
 
     @property
     def identity_public(self) -> SigningKey:
@@ -246,14 +267,19 @@ class Participant:
         print(f'{self.name} reserved one-time prekey '
               f'{bundle.one_time_prekey_id}; the pool holds '
               f'{self.prekey_pool_size} more')
+        print(f'{self.name} reserved post-quantum prekey '
+              f'{bundle.pq_prekey_id} (ML-KEM-768, 1184 bytes of the frame); '
+              f'the pool holds {self.pq_prekey_pool_size} more')
         return frame
 
     def as_receiver_answer(self, init_frame: bytes) -> bytes:
-        """The receiving role again: authenticate, spend the prekey, confirm."""
+        """The receiving role again: authenticate, spend the prekeys, confirm."""
         self.session, confirmation = accept(self._responder, init_frame)
         print(f'{self.name} authenticated the initiator and spent prekey '
-              f'{self.session.one_time_prekey_id}, leaving '
-              f'{self.prekey_pool_size} in the pool')
+              f'{self.session.one_time_prekey_id} and post-quantum prekey '
+              f'{self.session.pq_prekey_id}')
+        print(f'{self.name} pools now hold {self.prekey_pool_size} and '
+              f'{self.pq_prekey_pool_size}')
         print(f'{self.name} sent a key confirmation derived from the root key')
         return confirmation
 
@@ -270,6 +296,8 @@ class Participant:
         )
         rule('handshake')
         print(f'{self.name} verified the bundle signature before using it')
+        print(f'{self.name} encapsulated against the post-quantum prekey, so '
+              f'forward secrecy survives a future break of X25519')
         print(f'{self.name} is not confirmed yet: the root key stays locked '
               f'until the reply verifies')
         return init_frame
