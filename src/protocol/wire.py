@@ -33,7 +33,8 @@ bytes, and the first byte alone selects the format version.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+import os
+from typing import Optional, Tuple
 
 from ..crypto.double_ratchet import PROTOCOL_VERSION
 from ..crypto.x3dh import (
@@ -47,23 +48,39 @@ from nacl.exceptions import BadSignatureError
 from nacl.public import PublicKey
 from nacl.signing import VerifyKey
 
+# Re-exported, not redefined: these are protocol-wide limits and they live in
+# src.protocol.limits because more than one module needs them. They stay
+# importable from here because this is where callers have always found them.
+from .limits import MAX_FRAME_BYTES, MAX_VARINT_SHIFT
+from .padding import DEFAULT_PROFILE, PaddingProfile
+
 #: Wire format version. Independent of PROTOCOL_VERSION: the session protocol
 #: version governs key derivation, this one governs byte layout. A session
 #: survives a wire format change.
-WIRE_VERSION = 1
-
-#: Refuse frames larger than this before allocating. Ratchet messages are small;
-#: anything near this limit is an attack or a bug.
-MAX_FRAME_BYTES = 1 << 20  # 1 MiB
-
-#: Guard against absurd varints even inside a legal frame.
-MAX_VARINT_SHIFT = 63
+#:
+#: Version 2 added length hiding. A ratchet frame now carries a varint length
+#: for its ciphertext followed by random fill, and the plaintext inside the AEAD
+#: carries a varint length followed by random fill. Version 1 frames are refused
+#: with :class:`UnsupportedVersion` rather than decoded, which matters more than
+#: usual here: a v1 plaintext has no length prefix, so unpadding one would read
+#: its first byte as a length and could return a plausible-looking fragment
+#: instead of failing. Inside the AEAD that prefix cannot be forged by an
+#: attacker, so the only way to reach that state is a version mismatch -- which
+#: is exactly what the version byte is for.
+WIRE_VERSION = 2
 
 KEY_LEN = 32
 SIG_LEN = 64
 _MAC_LEN = 32
 _UINT32_MAX = 2 ** 32
 _UINT64_MAX = (1 << 64) - 1
+
+#: AEAD framing inside a ratchet message. A ciphertext shorter than nonce plus
+#: tag cannot be a message, and the ratchet would reject it; the wire refuses it
+#: first so the error names the real problem.
+_NONCE_LEN = 24
+_TAG_LEN = 16
+_MIN_CIPHERTEXT = _NONCE_LEN + _TAG_LEN
 
 
 class WireError(Exception):
@@ -394,6 +411,9 @@ class WireMessage:
     are bound to the ciphertext as AEAD associated data by
     :class:`~src.crypto.double_ratchet.DoubleRatchet`, so they cannot be
     modified without the message failing to decrypt.
+
+    ``ciphertext`` is the authenticated part only. Whatever padding follows it
+    in the frame is framing, not content: see :func:`encode_ratchet_message`.
     """
 
     dh: bytes
@@ -406,14 +426,74 @@ class WireMessage:
         return {'dh': self.dh.hex(), 'pn': self.pn, 'n': self.n}
 
 
-def encode_ratchet_message(ciphertext: bytes, header: dict) -> bytes:
+def _quantised_payload_length(target: int, minimum: int) -> int:
+    """
+    The payload length that makes a frame exactly ``target`` bytes long.
+
+    A frame is ``version | kind | varint(payload_len) | payload``, and the
+    varint's own width depends on the payload length it announces, so the sum
+    has to be solved rather than computed. Enumerating the possible varint
+    widths is exact and cheap: there are at most nine of them.
+
+    Not used by the encoder, which pads the payload to a ladder instead and lets
+    the frame length follow from it. It stays because it is the only way to ask
+    the question "what payload length makes this frame exactly N bytes", and the
+    answer is not the same as ``N - 2``.
+
+    Raises:
+        FrameTooLarge: no payload length reaches the target, which happens only
+            if the target is smaller than a frame's fixed parts.
+    """
+    for width in range(1, 10):
+        payload_length = target - 2 - width
+        if payload_length < 0:
+            break
+        if len(encode_varint(payload_length)) == width:
+            if payload_length < minimum:
+                raise FrameTooLarge(
+                    f'frame target of {target} bytes leaves {payload_length} for '
+                    f'the payload, below the {minimum} this message needs'
+                )
+            return payload_length
+    raise FrameTooLarge(f'no frame of exactly {target} bytes can be built')
+
+
+def encode_ratchet_message(ciphertext: bytes, header: dict,
+                           profile: Optional[PaddingProfile] = None) -> bytes:
     """
     Encode ``nonce || ciphertext`` together with its header.
+
+    The payload is::
+
+        dh | varint(pn) | varint(n) | varint(ciphertext_len) | ciphertext | fill
+
+    The ciphertext length prefix is what lets the receiver find the end of the
+    ciphertext while the frame is quantised. The trailing fill is what makes the
+    *frame* land on a bucket, so that two messages of different sizes are the
+    same size on the path.
+
+    The fill is not authenticated, and deliberately so. It carries no
+    information the receiver needs, and putting it under the AEAD would mean
+    re-encrypting it on every counter change for no gain. Changing it is
+    harmless: the receiver checks the declared length against the frame, takes
+    exactly that many bytes, and the AEAD then fails on the tag because a
+    modified length means the tag is no longer the last 16 bytes of what it
+    decrypts. That is a detectable failure, not a substitution.
+
+    Args:
+        profile: the size ladder. ``None`` uses
+            :data:`~src.protocol.padding.DEFAULT_PROFILE`; a profile with a
+            floor of zero produces unpadded frames, which is only useful for
+            measuring what padding costs.
 
     Raises:
         WireError: the header is malformed, so encoding it would produce a
             frame the peer must reject.
+        PaddingError: the message does not fit in a frame once padded.
     """
+    if profile is None:
+        profile = DEFAULT_PROFILE
+
     dh_hex = header.get('dh')
     if not isinstance(dh_hex, str) or len(dh_hex) != KEY_LEN * 2:
         raise InvalidField('header dh must be 32-byte hex')
@@ -429,18 +509,41 @@ def encode_ratchet_message(ciphertext: bytes, header: dict) -> bytes:
         if not 0 <= value < _UINT32_MAX:
             raise InvalidField(f'header {name} out of range')
 
-    payload = bytes((
+    if not isinstance(ciphertext, (bytes, bytearray, memoryview)):
+        raise InvalidField('ciphertext must be bytes')
+    ciphertext = bytes(ciphertext)
+
+    prefix = (
         dh
         + encode_varint(header['pn'])
         + encode_varint(header['n'])
-        + ciphertext
-    ))
-    return _encode_frame(KIND_RATCHET_MESSAGE, payload)
+        + encode_varint(len(ciphertext))
+    )
+    content = len(prefix) + len(ciphertext)
+    if not profile.enabled:
+        return _encode_frame(KIND_RATCHET_MESSAGE, prefix + ciphertext)
+
+    # The payload is padded up to the profile's frame ladder, which sits
+    # FRAME_OVERHEAD_MAX above the plaintext ladder so that a short message
+    # costs one bucket rather than two.
+    target_payload = profile.frame_payload_length(content)
+    if target_payload < content:  # pragma: no cover - the ladder guarantees it
+        raise FrameTooLarge(
+            f'padded payload of {target_payload} is smaller than the {content} '
+            f'bytes of message'
+        )
+    fill = os.urandom(target_payload - content)
+    return _encode_frame(KIND_RATCHET_MESSAGE, prefix + ciphertext + fill)
 
 
 def decode_ratchet_message(data: bytes) -> WireMessage:
     """
     Decode a ratchet message.
+
+    Trailing bytes after the declared ciphertext are framing padding and are
+    discarded. They are not required to be a whole number of buckets: a peer
+    with a different padding profile is not an error, and enforcing one here
+    would make a padding change into a hard protocol break.
 
     Raises:
         WireError: on any malformation.
@@ -448,8 +551,10 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
     _decode_header(data, (KIND_RATCHET_MESSAGE,))
     payload = _extract_payload(data, 0)
 
-    # A message is dh + at least two one-byte varints + nonce + tag.
-    minimum = KEY_LEN + 2 + 24 + 16
+    # A message is dh, three varints and a ciphertext that at least holds a
+    # nonce and a tag. The ciphertext length itself is checked below, against
+    # the value the frame declares.
+    minimum = KEY_LEN + 3 + _MIN_CIPHERTEXT
     if len(payload) < minimum:
         raise TruncatedFrame(
             f'ratchet payload of {len(payload)} bytes, minimum {minimum}'
@@ -459,12 +564,32 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
     dh, offset = _read_exact(payload, offset, KEY_LEN, 'header dh')
     pn, offset = decode_varint(payload, offset)
     n, offset = decode_varint(payload, offset)
-    ciphertext = payload[offset:]
-
+    ciphertext_length, offset = decode_varint(payload, offset)
     if pn > _UINT32_MAX or n > _UINT32_MAX:
         raise InvalidField('header counter exceeds 32 bits')
+    if ciphertext_length > _UINT32_MAX:
+        raise InvalidField('ciphertext length exceeds 32 bits')
+    if ciphertext_length < _MIN_CIPHERTEXT:
+        # Checked against the declared ciphertext, not the payload. A padded
+        # frame is large whatever it carries, so a length check on the frame
+        # would pass a ciphertext too short to hold a nonce and a tag, and the
+        # failure would surface later as a confusing AEAD error instead of
+        # here.
+        raise InvalidField(
+            f'ciphertext of {ciphertext_length} bytes cannot hold a '
+            f'{_NONCE_LEN}-byte nonce and a {_TAG_LEN}-byte tag'
+        )
 
-    return WireMessage(dh=dh, pn=pn, n=n, ciphertext=bytes(ciphertext))
+    ciphertext, end = _read_exact(
+        payload, offset, ciphertext_length, 'ciphertext'
+    )
+    # Anything left is the length padding the sender added to quantise the
+    # frame. Not an error if present, and not required to be.
+    if end > len(payload):  # pragma: no cover - _read_exact already checks
+        raise TruncatedFrame('ciphertext runs past the end of the frame')
+    return WireMessage(
+        dh=dh, pn=pn, n=n, ciphertext=bytes(ciphertext)
+    )
 
 
 def protocol_version() -> int:

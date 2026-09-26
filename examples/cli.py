@@ -65,6 +65,7 @@ from src.crypto.prekey_store import (  # noqa: E402
 )
 from src.crypto.x3dh import X3DH, X3DHResponder  # noqa: E402
 from src.p2p.relay import Relay  # noqa: E402
+from src.protocol.padding import DEFAULT_PROFILE, FRAME_OVERHEAD_MAX  # noqa: E402
 from src.protocol.session import Session, accept, initiate  # noqa: E402
 from src.protocol.verifier import safety_number  # noqa: E402
 from src.protocol.wire import decode_prekey_bundle, encode_prekey_bundle  # noqa: E402
@@ -81,6 +82,10 @@ from src.storage.store import (  # noqa: E402
 #: exists so the *next* handshake still has forward secrecy, and a demo that
 #: runs a few times does not need more.
 DEMO_PREKEYS = 10
+
+#: The smallest frame a padded message can produce: the plaintext floor plus the
+#: frame's own overhead. Used to spot a frame that escaped padding.
+MIN_PADDED_FRAME = DEFAULT_PROFILE.floor + FRAME_OVERHEAD_MAX + 4
 
 #: Container KDF cost. The library default is deliberately slow, which is right
 #: for a real profile and wrong for a command that should start instantly. This
@@ -307,15 +312,19 @@ def converse(sender: Participant, receiver: Participant, relay: Relay,
         assert receiver.session.receive(receiver_endpoint.receive()) == \
             b'x' * size
         print(f'  {size:>6} bytes of plaintext -> {len(frame):>6} byte frame')
+    print(f'  the padding floor is {DEFAULT_PROFILE.floor} bytes of plaintext, '
+          f'so a frame is at least {MIN_PADDED_FRAME} bytes')
 
 
 def report_lengths(relay: Relay, first_message: int) -> None:
     """
-    Print the one thing a passive observer gets for free.
+    Print what a passive observer gets, before and after padding.
 
-    The relay records every frame it carries, which is exactly what a network
-    observer sees. Reporting it here rather than in the docs is the point: the
-    numbers are produced by the code that ran, not asserted in prose.
+    Both numbers come from :class:`~src.p2p.relay.Transport`, which records
+    every frame it carries -- the same view a network observer has. Printing
+    them here rather than asserting them in prose is the point: the padded
+    figure is a measurement, and if the padding stopped working this line would
+    show it.
 
     Args:
         first_message: index in the observation of the first message frame, so
@@ -323,14 +332,32 @@ def report_lengths(relay: Relay, first_message: int) -> None:
             messages -- their sizes are fixed and public anyway.
     """
     rule('what an observer sees')
-    messages = relay.observed_lengths()[first_message:]
-    print(f'{len(messages)} message frames carried')
-    print(f'  lengths: {sorted(set(messages))}')
+    frames = relay.observed_lengths()[first_message:]
+    distinct = sorted(set(frames))
+    print(f'{len(frames)} message frames carried, '
+          f'{len(distinct)} distinct length(s): {distinct}')
+
+    unpadded = [size for size in frames if size < MIN_PADDED_FRAME]
+    if unpadded:
+        print(textwrap.fill(
+            f'UNEXPECTED: {len(unpadded)} frame(s) below the padding floor of '
+            f'{MIN_PADDED_FRAME} bytes. Padding is not being applied to '
+            f'everything it should be.',
+            width=68,
+        ))
+    else:
+        print(textwrap.fill(
+            'Every message frame is the same size, whatever the message was: '
+            'the padded plaintext length is rounded up to a bucket, and the '
+            'frame is sized from that. The one thing still visible is which '
+            'bucket a message fell into.',
+            width=68, initial_indent='  ', subsequent_indent='  ',
+        ))
     print(textwrap.fill(
-        'Nothing here pads, so a one-byte message and a four-kilobyte one are '
-        'as different on the wire as they are in the source. That is the honest '
-        'state of the metadata story, and it is the number the padding work has '
-        'to move.',
+        'Still visible, and not fixable here: how many messages there are, when '
+        'they were sent, which direction they went, and who they are with. '
+        'Padding moves the length signal only. Cover traffic and timing '
+        'obfuscation need a network to exist first.',
         width=68, initial_indent='  ', subsequent_indent='  ',
     ))
 
@@ -445,9 +472,10 @@ def run_demo(messages: int, directory: Optional[str], password: str) -> int:
     print(textwrap.fill(
         'Both roles run in one process over an in-process queue. There is no '
         'socket, no port, no second machine, no peer discovery and no Tor. '
-        'Frame lengths are visible to anyone watching the relay, as the numbers '
-        'above show. This is a demonstration that the protocol joins up, not a '
-        'messenger.',
+        'Padding hides the length of a message and nothing else: the count, '
+        'the timing, the direction and the peer are all still there, as the '
+        'numbers above show. This is a demonstration that the protocol joins '
+        'up, not a messenger.',
         width=68,
     ))
     return 0

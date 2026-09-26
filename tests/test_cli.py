@@ -69,9 +69,10 @@ def test_the_run_reports_real_frame_lengths(capsys):
     """
     The lengths printed have to be the lengths the transport carried.
 
-    This is the number the padding work will be judged against, so a demo that
-    prints a plausible-looking constant instead of the real one would remove the
-    only measurement in the repository.
+    This is the number the padding work is judged by, so a demo that printed a
+    plausible-looking constant instead of the real one would remove the only
+    measurement in the repository. The relay is asked directly, and every
+    distinct length it recorded has to appear in the output.
     """
     relay_lengths = []
 
@@ -92,20 +93,29 @@ def test_the_run_reports_real_frame_lengths(capsys):
     assert relay_lengths
     for length in sorted(set(relay_lengths)):
         assert str(length) in output
-    # And the sizes genuinely differ, which is the honest state of affairs today.
-    assert len(set(relay_lengths)) > 1
+    # And the instrument is capable of showing a difference, which is what makes
+    # "all the same" mean something. Without this, equal lengths would also be
+    # what a broken measurement would report.
+    assert len(relay_lengths) >= 3
 
 
-def test_the_run_shows_that_length_is_visible(capsys):
+def test_the_run_shows_the_padding_working(capsys):
     """
-    The demo must not imply the metadata problem is solved. It prints the
-    one-byte and four-kilobyte frame sizes precisely so the gap is visible.
+    The demo's job is to show what the code does, so it must not claim padding
+    is absent now that it is present, and it must not claim lengths are hidden
+    when only the size bucket is.
     """
-    main(['--messages', '0'])
+    main(['--messages', '1'])
     output = capsys.readouterr().out
-    assert 'Nothing here pads' in output
-    assert 'one-byte message and a four-kilobyte one' in output
-    assert 'not a messenger' in output
+    assert 'distinct length' in output
+    assert '1 distinct length' in output
+    assert '1 byte of plaintext' not in output
+    assert 'Every message frame is the same size' in output
+    # What padding does not do is still said out loud.
+    assert 'how many messages there are' in output
+    assert 'The one thing still visible is which' in output
+    # And the old claim that nothing pads must be gone.
+    assert 'Nothing here pads' not in output
 
 
 def test_the_run_prints_safety_numbers(capsys):

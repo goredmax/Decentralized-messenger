@@ -357,9 +357,22 @@ class TestRatchetMessage:
             encode_ratchet_message(b'\x00' * 40, dict(self._header(), dh='zz' * 32))
 
     def test_short_ciphertext_rejected(self):
+        """
+        A ciphertext too short to hold a nonce and a tag is refused by the
+        frame decoder.
+
+        The check is against the length the frame declares, not the frame's own
+        size: padding makes every frame large, so a frame-size check would wave
+        through a ciphertext that the ratchet would later reject with a much
+        less useful message.
+        """
         wire = encode_ratchet_message(b'\x00' * 8, self._header())
-        with pytest.raises(TruncatedFrame):
+        with pytest.raises(InvalidField):
             decode_ratchet_message(wire)
+        # And exactly at the minimum it is accepted, so the bound is not
+        # off by one in the cautious direction.
+        accepted = encode_ratchet_message(b'\x00' * 40, self._header())
+        assert len(decode_ratchet_message(accepted).ciphertext) == 40
 
     def test_truncation_at_every_offset_rejected(self):
         wire = encode_ratchet_message(b'\x00' * 64, self._header())

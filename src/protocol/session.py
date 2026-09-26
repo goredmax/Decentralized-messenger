@@ -82,6 +82,7 @@ from ..crypto.x3dh import (
     X3DHResponder,
     length_prefixed,
 )
+from .padding import DEFAULT_PROFILE, PaddingProfile, pad, unpad
 from .wire import (
     decode_handshake_init,
     decode_key_confirmation,
@@ -280,9 +281,17 @@ class Session:
     # Messages
     # ------------------------------------------------------------------
 
-    def send(self, plaintext: bytes) -> bytes:
+    def send(self, plaintext: bytes,
+             profile: Optional[PaddingProfile] = None) -> bytes:
         """
-        Encrypt one message into a complete wire frame.
+        Encrypt one message into a complete wire frame, padded.
+
+        Two layers of length hiding, both from one profile: the plaintext is
+        padded under the AEAD so the message length is hidden from anyone who
+        can decrypt but should not learn it, and the frame is quantised in
+        :mod:`src.protocol.wire` so its length on the path is a bucket rather
+        than a measurement. See :mod:`src.protocol.padding` for what this does
+        not hide, which is most of it.
 
         The responder cannot send first. Its ratchet starts without a remote DH
         key because the specification has it learn the initiator's ratchet key
@@ -290,30 +299,55 @@ class Session:
         raises :class:`~src.crypto.double_ratchet.InvalidSessionStateError`
         rather than guessing a remote key.
 
+        Args:
+            plaintext: the message.
+            profile: the size ladder, or ``None`` for
+                :data:`~src.protocol.padding.DEFAULT_PROFILE`. A profile with a
+                floor of zero produces unpadded frames, which is only useful
+                for measuring what padding is worth.
+
         Raises:
             KeyConfirmationRequired: the handshake is not confirmed yet.
             InvalidSessionStateError: this side has no remote ratchet key yet.
+            PaddingError: the message does not fit in a frame once padded.
             FrameTooLarge: the frame would exceed :data:`MAX_FRAME_BYTES`.
         """
         if not isinstance(plaintext, (bytes, bytearray, memoryview)):
             raise SessionError('plaintext must be bytes')
-        ciphertext, header = self.ratchet.encrypt(bytes(plaintext), self._ad)
-        return encode_ratchet_message(ciphertext, header)
+        if profile is None:
+            profile = DEFAULT_PROFILE
+        padded = pad(bytes(plaintext), profile)
+        ciphertext, header = self.ratchet.encrypt(padded, self._ad)
+        return encode_ratchet_message(ciphertext, header, profile)
 
-    def receive(self, frame: bytes) -> bytes:
+    def receive(self, frame: bytes,
+                profile: Optional[PaddingProfile] = None) -> bytes:
         """
-        Decrypt one complete wire frame.
+        Decrypt one complete wire frame and strip its padding.
+
+        Unpadding happens after the AEAD, so a padding failure here means the
+        padding itself was wrong -- a bug or a downgrade -- not a corrupted
+        packet, which the AEAD would have rejected already.
+
+        Args:
+            frame: the frame.
+            profile: the size ladder, or ``None`` for the default. Only the
+                plaintext bucket is consulted on the way in, so a peer with a
+                different profile still decodes; the frame's own quantisation is
+                verified by neither side.
 
         Raises:
             WireError: the frame is malformed or of an unknown kind.
+            PaddingError: the decrypted plaintext is not a padded message.
             DoubleRatchetError: the frame did not authenticate under this
                 session, which is what a replay from another session, a forged
                 header and a tampered ciphertext all look like from here.
         """
         message = decode_ratchet_message(frame)
-        return self.ratchet.decrypt(
+        padded = self.ratchet.decrypt(
             message.ciphertext, message.to_header(), self._ad
         )
+        return unpad(padded)
 
     # ------------------------------------------------------------------
     # Persistence
