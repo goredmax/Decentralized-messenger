@@ -127,13 +127,21 @@ def _u32(value: int) -> bytes:
     return value.to_bytes(4, 'big')
 
 
-def _length_prefixed(*chunks: Optional[bytes]) -> bytes:
+def length_prefixed(*chunks: Optional[bytes]) -> bytes:
     """
     Concatenate chunks with explicit length prefixes.
 
     Length prefixing keeps the encoding unambiguous, so no two different field
     sets can produce the same byte string. Without it a signature could be
     replayed against a differently split set of fields.
+
+    Public, because :mod:`src.protocol.session` builds its AEAD associated data
+    out of the same kind of object: an ordered set of fields that has to be
+    canonically encoded before it can be hashed. Two implementations of a
+    canonicalisation primitive on either side of a MAC are precisely the
+    failure this repository already paid for once, when the X3DH and Double
+    Ratchet call sites carried separate copies of HKDF and one of them was
+    wrong in a way that no round-trip test noticed (see :mod:`src.crypto.kdf`).
     """
     out = bytearray()
     for chunk in chunks:
@@ -160,7 +168,7 @@ def _init_transcript(
     """
     opk = (None if one_time_prekey_id is None
            else one_time_prekey_id.to_bytes(8, 'big'))
-    return _length_prefixed(
+    return length_prefixed(
         INIT_TRANSCRIPT_LABEL,
         bytes(identity_key),
         bytes(identity_key_x25519),
@@ -358,7 +366,7 @@ def confirmation_mac(
     a confirmation cannot be replayed against a different session or a
     substituted identity key.
     """
-    transcript = X25519_F + _length_prefixed(
+    transcript = X25519_F + length_prefixed(
         associated_data,
         bytes(alice_identity),
         bytes(alice_ephemeral),
@@ -404,6 +412,37 @@ class X3DHSession:
     @property
     def is_confirmed(self) -> bool:
         return self._is_confirmed
+
+    @property
+    def initiator_identity(self) -> VerifyKey:
+        """
+        Identity key of the side that started the handshake.
+
+        Raises:
+            InvalidHandshakeError: the session was built without identities, so
+                there is nothing to bind associated data to. Returning None
+                would push the failure into the AEAD, where it would be
+                indistinguishable from a wrong message key.
+        """
+        if self._alice_identity is None:
+            raise InvalidHandshakeError(
+                'this X3DH session carries no initiator identity key'
+            )
+        return self._alice_identity
+
+    @property
+    def responder_identity(self) -> VerifyKey:
+        """
+        Identity key of the side that answered the handshake.
+
+        Raises:
+            InvalidHandshakeError: the session was built without identities.
+        """
+        if self._bob_identity is None:
+            raise InvalidHandshakeError(
+                'this X3DH session carries no responder identity key'
+            )
+        return self._bob_identity
 
     @property
     def one_time_prekey_id(self) -> Optional[int]:

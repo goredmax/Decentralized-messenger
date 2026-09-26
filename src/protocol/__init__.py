@@ -7,4 +7,4 @@ structures between processes, which is a different set of concerns and a
 different set of mistakes.
 """
 
-__all__ = ['wire']
+__all__ = ['sender_key', 'session', 'verifier', 'wire']
