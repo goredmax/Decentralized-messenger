@@ -72,6 +72,7 @@ class PersistentPreKeyStore(PreKeyStore):
         self._lock = threading.Lock()
         self._keys: Dict[int, OneTimePreKey] = {}
         self._used: Dict[int, bool] = {}
+        self._reserved: set = set()
         self._epoch = 0
         self._load()
 
@@ -102,8 +103,12 @@ class PersistentPreKeyStore(PreKeyStore):
                 key_id=key_id, private_key=private, public_key=public
             )
         used = {int(value) for value in document.get('used') or []}
+        reserved = {int(value) for value in document.get('reserved') or []}
         self._keys = keys
         self._used = {key_id: True for key_id in used}
+        # A reservation on a consumed key is meaningless, and trusting a file
+        # that claims otherwise would let a reservation be silently lost.
+        self._reserved = reserved - set(self._used)
 
     def _flush(self) -> None:
         document = {
@@ -116,6 +121,7 @@ class PersistentPreKeyStore(PreKeyStore):
                 for key in self._keys.values()
             ],
             'used': sorted(self._used),
+            'reserved': sorted(self._reserved),
         }
         self._epoch += 1
         self._container.store(
@@ -179,9 +185,42 @@ class PersistentPreKeyStore(PreKeyStore):
 
     def peek_any(self) -> Optional[OneTimePreKey]:
         with self._lock:
-            if not self._keys:
+            available = [key_id for key_id in sorted(self._keys)
+                         if key_id not in self._reserved]
+            if not available:
                 return None
-            return self._keys[min(self._keys)]
+            return self._keys[available[0]]
+
+    def reserve_next(self) -> Optional[OneTimePreKey]:
+        with self._lock:
+            available = [key_id for key_id in sorted(self._keys)
+                         if key_id not in self._reserved]
+            if not available:
+                return None
+            key_id = available[0]
+            self._reserved.add(key_id)
+            try:
+                self._flush()
+            except Exception:
+                self._reserved.discard(key_id)
+                raise
+            return self._keys[key_id]
+
+    def release(self, key_id: int) -> None:
+        with self._lock:
+            if key_id in self._used:
+                raise PreKeyStoreError(
+                    f'prekey id {key_id} was already consumed and cannot be '
+                    f'released'
+                )
+            if key_id not in self._keys:
+                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+            self._reserved.discard(key_id)
+            self._flush()
+
+    def reserved_ids(self) -> List[int]:
+        with self._lock:
+            return sorted(self._reserved)
 
     def count(self) -> int:
         with self._lock:

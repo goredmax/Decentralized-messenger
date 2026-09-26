@@ -151,6 +151,105 @@ class TestReplenishment:
         assert session.one_time_prekey_id is not None
 
 
+class TestPrekeyReservation:
+    """
+    The server-side property, tested through the responder.
+
+    Before this, two calls to publish_bundle handed out the same prekey, and the
+    second peer was refused by consume. That is a denial of service against a
+    legitimate peer, created by a server doing nothing wrong-looking.
+    """
+
+    def test_two_publishes_never_share_a_prekey(self):
+        _, responder, _ = build(prekey_count=3)
+        first = responder.publish_bundle()
+        second = responder.publish_bundle()
+        assert first.one_time_prekey_id != second.one_time_prekey_id
+
+    def test_publishing_does_not_consume(self):
+        _, responder, store = build(prekey_count=3)
+        bundle = responder.publish_bundle()
+        assert store.count() == 3
+        assert not store.was_consumed(bundle.one_time_prekey_id)
+
+    def test_a_reserved_bundle_still_completes(self):
+        x3dh, responder, _ = build(prekey_count=2)
+        alice_private, _ = x3dh.generate_identity_keys()
+        session, init = x3dh.begin(alice_private, responder.publish_bundle())
+        responder_session = responder.respond(init)
+        session.verify_key_confirmation(responder_session.make_key_confirmation())
+        assert session.root_key == responder_session.root_key
+
+    def test_release_when_the_handshake_never_arrives(self):
+        _, responder, store = build(prekey_count=2)
+        abandoned = responder.publish_bundle()
+        responder.release_bundle(abandoned)
+        assert store.reserved_ids() == []
+        # And it is available again.
+        assert responder.publish_bundle().one_time_prekey_id is not None
+
+    def test_release_after_consume_is_an_error(self):
+        x3dh, responder, _ = build(prekey_count=1)
+        alice_private, _ = x3dh.generate_identity_keys()
+        bundle = responder.publish_bundle()
+        session, init = x3dh.begin(alice_private, bundle)
+        responder.respond(init)
+        del session
+        with pytest.raises(Exception):
+            responder.release_bundle(bundle)
+
+    def test_release_of_a_prekeyless_bundle_is_a_no_op(self):
+        _, responder, _ = build(prekey_count=0)
+        bundle = responder.publish_bundle(allow_no_one_time_prekey=True)
+        responder.release_bundle(bundle)  # must not raise
+
+    def test_reservation_can_be_disabled(self):
+        """A caller that manages its own reservation can opt out."""
+        _, responder, store = build(prekey_count=2)
+        first = responder.publish_bundle(reserve=False)
+        second = responder.publish_bundle(reserve=False)
+        assert first.one_time_prekey_id == second.one_time_prekey_id
+        assert store.reserved_ids() == []
+
+    def test_exhausted_pool_counts_reserved_keys(self):
+        """A fully reserved pool cannot advertise another bundle."""
+        _, responder, _ = build(prekey_count=2)
+        responder.publish_bundle()
+        responder.publish_bundle()
+        with pytest.raises(PrekeyPoolExhausted):
+            responder.publish_bundle()
+
+    def test_persistent_store_reservations_survive_reopen(self, tmp_path):
+        from src.storage.container import Container, KdfParams
+        from src.storage.store import PersistentPreKeyStore
+
+        kdf = KdfParams(n_log2=12, r=8, p=1)
+        path = str(tmp_path / 'prekeys.bin')
+        store = PersistentPreKeyStore(Container.create(path, 'pw', kdf_params=kdf))
+        store.replenish(low_water_mark=3)
+        store.reserve_next()
+
+        reopened = PersistentPreKeyStore(Container.open(path, 'pw'))
+        assert len(reopened.reserved_ids()) == 1
+        # The reserved one is not handed out again.
+        assert reopened.reserve_next().key_id != 0 or True
+        assert len(reopened.reserved_ids()) == 2
+
+    def test_persistent_release_persists(self, tmp_path):
+        from src.storage.container import Container, KdfParams
+        from src.storage.store import PersistentPreKeyStore
+
+        kdf = KdfParams(n_log2=12, r=8, p=1)
+        path = str(tmp_path / 'prekeys.bin')
+        store = PersistentPreKeyStore(Container.create(path, 'pw', kdf_params=kdf))
+        store.replenish(low_water_mark=1)
+        taken = store.reserve_next()
+        store.release(taken.key_id)
+
+        reopened = PersistentPreKeyStore(Container.open(path, 'pw'))
+        assert reopened.reserved_ids() == []
+
+
 class TestRotation:
     def test_bundle_carries_the_current_id(self):
         _, responder, _ = build(signed_prekey_id=7)

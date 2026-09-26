@@ -867,7 +867,10 @@ class X3DHResponder:
         return self.identity_private.verify_key
 
     def publish_bundle(
-        self, *, allow_no_one_time_prekey: bool = False
+        self,
+        *,
+        allow_no_one_time_prekey: bool = False,
+        reserve: bool = True,
     ) -> PreKeyBundle:
         """
         Build the bundle to hand to an initiator.
@@ -878,21 +881,23 @@ class X3DHResponder:
                 but has **no forward secrecy**, so it is opt-in rather than the
                 default. A caller that accepts the downgrade is expected to
                 record that it did.
+            reserve: take the prekey out of circulation while it is advertised.
+                On by default. Without it, two calls hand out the same prekey
+                and the second handshake is refused by ``consume``, which is a
+                denial of service against a legitimate peer caused by nothing
+                more than a naive server. Use :meth:`release_bundle` to return an
+                advertised prekey when the handshake never arrives.
 
         Raises:
             PrekeyPoolExhausted: the pool is empty and the caller did not opt in
                 to the weaker variant.
 
-        Publication does not consume a one-time prekey: the handshake may never
-        arrive, and consuming here would silently shrink the pool. The atomic
-        decision happens in :meth:`handle_init`.
-
-        A production server must additionally *reserve* the prekey it hands out,
-        so two clients are never issued the same one. This reference
-        implementation does not model reservation; see the module docstring of
-        :mod:`src.crypto.prekey_store`.
+        A reserved prekey stays consumable, so the handshake it was advertised
+        for still succeeds. What changes is that a *second* bundle cannot carry
+        it.
         """
-        candidate = self.prekey_store.peek_any()
+        candidate = self.prekey_store.reserve_next() if reserve \
+            else self.prekey_store.peek_any()
         if candidate is None and not allow_no_one_time_prekey:
             raise PrekeyPoolExhausted(
                 'no one-time prekeys available; replenish the pool, or pass '
@@ -907,6 +912,21 @@ class X3DHResponder:
             one_time_prekey_id=None if candidate is None else candidate.key_id,
             signed_prekey_id=self.signed_prekey_id,
         )
+
+    def release_bundle(self, bundle: PreKeyBundle) -> None:
+        """
+        Return the prekey an advertised bundle carried to circulation.
+
+        For the case where the handshake never arrived. Once ``handle_init`` has
+        run the key is consumed and this raises, which is the intended way to
+        notice the mistake.
+
+        Raises:
+            PreKeyStoreError: the prekey was already consumed.
+        """
+        if bundle.one_time_prekey_id is None:
+            return
+        self.prekey_store.release(bundle.one_time_prekey_id)
 
     def respond(
         self,
