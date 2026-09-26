@@ -27,7 +27,7 @@ import threading
 from typing import Dict, List, Optional
 
 from nacl.public import PrivateKey, PublicKey
-from nacl.signing import SigningKey
+from nacl.signing import SigningKey, VerifyKey
 
 from ..crypto.prekey_store import (
     NoSuchPreKey,
@@ -450,3 +450,128 @@ class SessionStore:
                 name for name in os.listdir(self._directory)
                 if name.endswith('.session')
             )
+
+
+def peer_id(identity) -> str:
+    """
+    The stable id a peer is known by: the hex of its Ed25519 identity key.
+
+    :class:`SessionStore` is keyed by an opaque string, and something has to
+    decide what that string is. The identity key is the only value available on
+    both sides of a conversation before any session exists, and it is what
+    :class:`PeerDirectory` indexes, so the two stay in step.
+    """
+    if not isinstance(identity, VerifyKey):
+        raise StorageError('peer_id expects a VerifyKey')
+    return bytes(identity).hex()
+
+
+class PeerDirectory:
+    """
+    Who this client has conversations with, and which side each one started on.
+
+    Both facts are needed to restore a session and neither is in the persisted
+    ratchet state: :meth:`Session.from_state` requires the peer's identity key,
+    because the associated data is derived from it, and the role, because the
+    role fixes the order of the two identity keys in that same associated data.
+    A :class:`SessionStore` alone therefore cannot bring a conversation back --
+    it can store the state and hand it out, but nothing could say whose it is or
+    which way round it was created. That is what this fills.
+
+    The peer list is metadata: it says who talks to whom and which of them
+    started each conversation. It is sealed in a container for that reason, not
+    merely for tidiness.
+    """
+
+    def __init__(self, container: Container, minimum_epoch: Optional[int] = None):
+        self._container = container
+        self._minimum_epoch = minimum_epoch
+        self._lock = threading.Lock()
+        self._peers: Dict[str, bool] = {}
+        self._epoch = 0
+        self._load()
+
+    def _load(self) -> None:
+        epoch, raw = self._container.load(minimum_epoch=self._minimum_epoch)
+        self._epoch = epoch
+        if not raw:
+            return
+        try:
+            document = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise StorageError('peer directory payload is not valid JSON') from exc
+        peers = document.get('peers')
+        if not isinstance(peers, dict):
+            raise StorageError('peer directory payload has no peers object')
+        for identifier, entry in peers.items():
+            if not isinstance(identifier, str) or len(identifier) != 64:
+                raise StorageError(f'peer id {identifier!r} is not 32-byte hex')
+            if not isinstance(entry, dict) or \
+                    not isinstance(entry.get('is_initiator'), bool):
+                raise StorageError(
+                    f'peer {identifier} has no usable is_initiator flag'
+                )
+            self._peers[identifier] = entry['is_initiator']
+
+    def _flush(self) -> None:
+        document = {
+            'peers': {
+                identifier: {'is_initiator': is_initiator}
+                for identifier, is_initiator in sorted(self._peers.items())
+            }
+        }
+        self._epoch += 1
+        self._container.store(
+            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+        )
+
+    def set(self, identity: VerifyKey, *, is_initiator: bool) -> None:
+        """
+        Record a peer and the role this side had with it.
+
+        Re-recording an existing peer with the same role is a no-op on disk; a
+        different role overwrites, because a role change means a new handshake
+        replaced the old session and the newest fact is the useful one.
+        """
+        identifier = peer_id(identity)
+        with self._lock:
+            if self._peers.get(identifier) == is_initiator:
+                return
+            self._peers[identifier] = is_initiator
+            self._flush()
+
+    def role_of(self, identity: VerifyKey) -> Optional[bool]:
+        """
+        Which side this client was in the conversation with ``identity``.
+
+        Returns:
+            ``True`` if this client started it, ``False`` if it answered, and
+            ``None`` if the peer is unknown.
+        """
+        with self._lock:
+            return self._peers.get(peer_id(identity))
+
+    def is_known(self, identity: VerifyKey) -> bool:
+        return self.role_of(identity) is not None
+
+    def remove(self, identity: VerifyKey) -> None:
+        """Forget a peer. Its session, if any, is the caller's to delete."""
+        identifier = peer_id(identity)
+        with self._lock:
+            if identifier not in self._peers:
+                return
+            del self._peers[identifier]
+            self._flush()
+
+    def peers(self) -> List[VerifyKey]:
+        """Every known peer, as identity keys, in a stable order."""
+        with self._lock:
+            return [
+                VerifyKey(bytes.fromhex(identifier))
+                for identifier in sorted(self._peers)
+            ]
+
+    @property
+    def epoch(self) -> int:
+        with self._lock:
+            return self._epoch

@@ -34,8 +34,10 @@ from src.storage.container import (
 )
 from src.storage.store import (
     IdentityStore,
+    PeerDirectory,
     PersistentPreKeyStore,
     SessionStore,
+    peer_id,
 )
 
 # Weaker parameters keep the suite fast. Production defaults are in DEFAULT_KDF.
@@ -580,6 +582,165 @@ class TestSessionStore:
         raw = open(os.path.join(directory, store._path('peer')), 'rb').read()
         for key in (state.root_key, state.send_chain_key):
             assert key and key not in raw
+
+
+class TestPeerDirectory:
+    """
+    The piece that was missing between a peer's public key and a stored
+    session: :class:`SessionStore` is keyed by an opaque id, and nothing could
+    produce that id from a key or remember which role the session was made in.
+    """
+
+    @pytest.fixture
+    def directory_path(self, tmp_path):
+        return str(tmp_path / 'peers.bin')
+
+    def test_round_trip(self, directory_path):
+        container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        directory = PeerDirectory(container)
+        alice = SigningKey.generate().verify_key
+        bob = SigningKey.generate().verify_key
+
+        assert directory.role_of(alice) is None
+        directory.set(alice, is_initiator=True)
+        directory.set(bob, is_initiator=False)
+        assert directory.role_of(alice) is True
+        assert directory.role_of(bob) is False
+
+        # "Restart".
+        reopened = PeerDirectory(
+            Container.open(directory_path, PASSWORD)
+        )
+        assert reopened.role_of(alice) is True
+        assert reopened.role_of(bob) is False
+        # Stable order by id, so the two random keys are not in insertion order.
+        assert set(reopened.peers()) == {alice, bob}
+
+    def test_a_peer_id_is_the_identity_key_hex(self):
+        identity = SigningKey.generate().verify_key
+        assert peer_id(identity) == bytes(identity).hex()
+        with pytest.raises(StorageError):
+            peer_id(bytes(identity))
+
+    def test_the_directory_is_sealed(self, directory_path):
+        """
+        The peer list says who talks to whom. That is metadata, and leaving it
+        readable would undo the point of the container.
+        """
+        container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        directory = PeerDirectory(container)
+        alice = SigningKey.generate().verify_key
+        directory.set(alice, is_initiator=True)
+
+        raw = open(directory_path, 'rb').read()
+        assert bytes(alice) not in raw
+        assert b'is_initiator' not in raw
+        assert b'peers' not in raw
+
+    def test_wrong_password(self, directory_path):
+        container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        PeerDirectory(container).set(
+            SigningKey.generate().verify_key, is_initiator=True
+        )
+        with pytest.raises(WrongPassword):
+            PeerDirectory(Container.open(directory_path, 'wrong'))
+
+    def test_re_recording_the_same_role_does_not_rewrite(self, directory_path):
+        """
+        Rewriting on every call would mean an epoch bump per message, and the
+        epoch exists to make a rollback detectable.
+        """
+        directory = PeerDirectory(
+            Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        )
+        identity = SigningKey.generate().verify_key
+        directory.set(identity, is_initiator=True)
+        epoch = directory.epoch
+        for _ in range(5):
+            directory.set(identity, is_initiator=True)
+        assert directory.epoch == epoch
+
+    def test_a_new_handshake_replaces_the_role(self, directory_path):
+        directory = PeerDirectory(
+            Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        )
+        identity = SigningKey.generate().verify_key
+        directory.set(identity, is_initiator=True)
+        directory.set(identity, is_initiator=False)
+        assert directory.role_of(identity) is False
+        assert PeerDirectory(
+            Container.open(directory_path, PASSWORD)
+        ).role_of(identity) is False
+
+    def test_remove(self, directory_path):
+        directory = PeerDirectory(
+            Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        )
+        identity = SigningKey.generate().verify_key
+        directory.set(identity, is_initiator=True)
+        directory.remove(identity)
+        assert directory.role_of(identity) is None
+        assert directory.peers() == []
+        # Removing an unknown peer is not an error.
+        directory.remove(identity)
+
+    def test_a_corrupt_payload_is_refused(self, directory_path):
+        """
+        A hand-edited or truncated directory must fail rather than yield a
+        half-known peer list, which would silently mislabel a stored session.
+        """
+        container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
+        for payload in (
+            b'not json',
+            json.dumps({'peers': 'not an object'}).encode(),
+            json.dumps({'peers': {'short': {'is_initiator': True}}}).encode(),
+            json.dumps({
+                'peers': {'aa' * 32: {'is_initiator': 'yes'}}
+            }).encode(),
+            json.dumps({'peers': {'aa' * 32: {}}}).encode(),
+        ):
+            container.store(payload, container.load()[0] + 1)
+            with pytest.raises(StorageError):
+                PeerDirectory(container)
+
+    def test_a_restored_session_is_reachable_from_its_peer_key(self, tmp_path):
+        """
+        The whole point, end to end: a peer's public key and a role are enough
+        to find and reopen the conversation stored under them.
+        """
+        from src.crypto.double_ratchet import PROTOCOL_VERSION, DoubleRatchet
+        import nacl.public as public
+        directory = PeerDirectory(
+            Container.create(str(tmp_path / 'peers.bin'), PASSWORD, kdf_params=FAST)
+        )
+        sessions = SessionStore(str(tmp_path / 'sessions'), PASSWORD)
+        peer = SigningKey.generate().verify_key
+
+        local = public.PrivateKey.generate()
+        remote = public.PrivateKey.generate()
+        ratchet = DoubleRatchet(
+            dh_private=local,
+            remote_dh_public=bytes(remote.public_key),
+            root_key=b'\x02' * 32,
+            is_initiator=True,
+        )
+        ratchet.encrypt(b'hello')
+        sessions.save(peer_id(peer), ratchet.state)
+        directory.set(peer, is_initiator=True)
+        # The initiator ratchets in the constructor, so the root key on disk is
+        # already one step in; comparing against the pre-construction value
+        # would be comparing against a key the ratchet never used.
+        expected_root = ratchet.state.root_key
+
+        # Restart, keeping only the peer's public key and the directory.
+        reopened_peers = PeerDirectory(
+            Container.open(str(tmp_path / 'peers.bin'), PASSWORD)
+        )
+        reopened_sessions = SessionStore(str(tmp_path / 'sessions'), PASSWORD)
+        role = reopened_peers.role_of(peer)
+        state = reopened_sessions.load(peer_id(peer), PROTOCOL_VERSION)
+        assert role is True
+        assert state.root_key == expected_root
 
 
 class TestEndToEndWithStorage:
