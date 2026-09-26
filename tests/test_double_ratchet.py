@@ -159,16 +159,7 @@ class TestPostCompromiseSecurity:
 
         # The attacker exfiltrates Alice's state at this point.
         snapshot = SessionState.deserialize(alice.state.serialize())
-        attacker = DoubleRatchet(
-            dh_private=public.PrivateKey(snapshot.dh_local_priv),
-            remote_dh_public=snapshot.dh_remote_pub,
-            root_key=snapshot.root_key,
-            is_initiator=False,
-        )
-        attacker.state.send_chain_key = snapshot.send_chain_key
-        attacker.state.recv_chain_key = snapshot.recv_chain_key
-        attacker.state.send_msg_count = snapshot.send_msg_count
-        attacker.state.recv_msg_count = snapshot.recv_msg_count
+        attacker = DoubleRatchet.from_state(snapshot)
 
         # Legitimate traffic continues; Bob's reply ratchets both sides.
         for index in range(3):
