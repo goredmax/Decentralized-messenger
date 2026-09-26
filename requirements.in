@@ -1,0 +1,20 @@
+# Runtime dependencies.
+#
+# This file lists only what the code in src/ actually imports. The previous
+# version also carried libp2p, stem, tor-request, aiohttp, aiortc,
+# sqlcipher-legacy and orjson, none of which are imported anywhere: the
+# corresponding modules (src/p2p, src/tor, src/network, src/storage) are empty
+# stubs. Shipping them meant a real dependency on a name that does not provide
+# the claimed functionality, and unbounded ">=" ranges that make builds
+# non-reproducible.
+#
+#   sqlcipher-legacy was the sharpest edge: it is not a working SQLCipher
+#   binding (pysqlcipher3 is). The correct dependency arrives with the storage
+#   implementation, not before it.
+#
+# Generate a hashed lock file with:
+#   pip-compile --generate-hashes --output-file=requirements.lock requirements.in
+# and install with:
+#   pip install --require-hashes -r requirements.lock
+
+PyNaCl>=1.5,<2

@@ -5,10 +5,10 @@ Based on libsodium (PyNaCl) - a proven, audited cryptographic library.
 """
 
 import nacl.public as public
+import nacl.bindings
+from nacl.exceptions import CryptoError
 from nacl.public import PrivateKey, PublicKey
 import nacl.signing as signing
-from nacl.utils import random
-from typing import Tuple
 
 
 class KeyPair:
@@ -85,11 +85,15 @@ class RemotePublicKey:
 
 class Box:
     """
-    Implements authenticated encryption using NaCl box.
-    Combines X25519 key exchange with AES-256-GCM encryption.
-    Provides forward secrecy when used with Double Ratchet.
+    Implements authenticated encryption using NaCl box (crypto_box).
+    Combines X25519 key exchange with XSalsa20-Poly1305 (NOT AES-256-GCM).
+
+    WARNING: crypto_box uses *static* key pairs, so on its own it provides no
+    forward secrecy. Forward secrecy and post-compromise security for messages
+    come exclusively from the Double Ratchet (see double_ratchet.py). Do not
+    use this class alone for traffic that requires forward secrecy.
     """
-    
+
     def __init__(self, private_key: PrivateKey, public_key: PublicKey):
         """
         Create encrypted channel between two parties.
@@ -148,7 +152,41 @@ def generate_shared_secret(private_key: PrivateKey,
     Generate shared secret using X25519 ECDH.
     Used as basis for Double Ratchet protocol.
     """
-    return public.Box(private_key, public_key)._shared_key
+    return _scalarmult(private_key, public_key)
+
+
+def _scalarmult(private_key: PrivateKey, public_key: PublicKey) -> bytes:
+    """
+    X25519 scalar multiplication, with an explicit all-zero output check.
+
+    libsodium already rejects an all-zero result (which is what a low-order or
+    otherwise degenerate public key produces), but the check is kept explicit so
+    the guarantee survives a future change of backend.
+    """
+    shared = nacl.bindings.crypto_scalarmult(
+        bytes(private_key), bytes(public_key)
+    )
+    if shared == b'\x00' * 32:
+        raise CryptoError('degenerate X25519 output (low-order public key)')
+    return shared
+
+
+def identity_private_x25519(signing_key: signing.SigningKey) -> PrivateKey:
+    """
+    Derive the X25519 private key matching an Ed25519 identity key.
+
+    Deviation from the Signal specification, which keeps separate keys for
+    signing (Ed25519) and for DH (X25519). Reusing one key for both roles means
+    a single key compromise breaks both authentication and key agreement, and
+    the Ed25519 -> X25519 conversion is only defined for curve points. This is
+    centralised here so the deviation stays visible and has one implementation.
+    """
+    return PrivateKey(signing_key.to_curve25519_private_key().encode())
+
+
+def identity_public_x25519(verify_key: signing.VerifyKey) -> PublicKey:
+    """Derive the X25519 public key matching an Ed25519 identity key."""
+    return PublicKey(verify_key.to_curve25519_public_key().encode())
 
 
 # Example usage
@@ -173,14 +211,16 @@ if __name__ == "__main__":
     message = b"Hello, secure world!"
     encrypted = alice_to_bob.encrypt(message)
     decrypted = bob_from_alice.decrypt(encrypted)
-    
-    assert decrypted == message
-    print("✓ E2EE test passed!")
-    
+
+    if decrypted != message:
+        raise RuntimeError('NaCl box round-trip failed')
+    print("E2EE round-trip OK")
+
     # Test signing
     alice_signer = Signer(alice._sign_private)
     signed = alice_signer.sign(message)
-    
+
     verified = alice_signer.verify(signed, alice._sign_public)
-    assert verified == message
-    print("✓ Signature test passed!")
+    if verified != message:
+        raise RuntimeError('Ed25519 signature round-trip failed')
+    print("Signature round-trip OK")

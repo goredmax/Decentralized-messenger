@@ -1,4 +1,3 @@
-```
 # Python
 __pycache__/
 *.pyc
@@ -47,4 +46,9 @@ Thumbs.db
 # Testing
 .tests/
 test-results/
-```
+
+# Security scanner output
+bandit.json
+bandit-report.json
+pip-audit-report.json
+coverage.xml
