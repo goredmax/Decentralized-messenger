@@ -41,14 +41,36 @@
 
 ## Используемые технологии
 
-- **PyNaCl / libsodium** — примитивы
-- **libp2p**, **stem** — сеть и Tor *(в requirements, кода нет)*
+- **PyNaCl / libsodium** — примитивы, единственная runtime-зависимость
+- **cryptography** — только для тестов (кросс-валидация против независимой
+  реализации)
 
-> Замечание: `requirements.txt` закрепляет зависимости только нижними границами
-> (`>=`) без хешей, поэтому сборка невоспроизводима. Это известная проблема,
-> не решённая в рамках крипто-правок. Пакет `sqlcipher-legacy` не является
-> рабочим биндингом SQLCipher; он заменён на `pysqlcipher3` только вместе с
-> реализацией хранилища.
+### Зависимости
+
+| Файл | Назначение |
+| --- | --- |
+| `requirements.in` | Runtime: только то, что реально импортирует `src/` |
+| `requirements.lock` | Hashed lock для `pip install --require-hashes` |
+| `requirements-dev.in` | Тесты и статический анализ |
+| `requirements-dev.lock` | Hashed lock для CI |
+
+Раньше в `requirements.txt` были `libp2p`, `stem`, `tor-request`, `aiohttp`,
+`aiortc`, `sqlcipher-legacy` и `orjson` с диапазонами `>=` без хешей. Ни один из
+них не импортировался: соответствующие модули — пустые заглушки.
+`sqlcipher-legacy` при этом не является рабочим биндингом SQLCipher (нужен
+`pysqlcipher3`). Теперь зависимости совпадают с кодом, а lock-файлы позволяют
+воспроизводимую установку.
+
+Перегенерировать:
+
+```sh
+pip-compile --generate-hashes --output-file=requirements.lock requirements.in
+pip-compile --generate-hashes --allow-unsafe \
+    --output-file=requirements-dev.lock requirements-dev.in
+```
+
+> Lock-файлы собраны под Python 3.13. Расширение матрицы версий в CI требует
+> пересборки lock-файлов.
 
 ## Безопасность
 
@@ -96,7 +118,7 @@
 ## Тесты
 
 ```sh
-pip install -r requirements.txt
+pip install --require-hashes -r requirements-dev.lock
 python -m pytest tests/ -v
 ```
 
@@ -110,7 +132,13 @@ python -m pytest tests/ -v
 
 ## Лицензия
 
-MIT
+MIT, см. [LICENSE](LICENSE).
+
+## Безопасность
+
+Политика раскрытия и список того, что считается уязвимостью, — в
+[SECURITY.md](SECURITY.md). Модель угроз с указанием того, что реально
+реализовано, — в [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## Contributing
 

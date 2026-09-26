@@ -1,0 +1,24 @@
+# Development and test dependencies.
+#
+# cryptography is a test-only dependency: tests/test_primitives.py uses it to
+# cross-validate our HKDF and X25519 against an independent implementation. That
+# check is what caught the empty-chain-key defect, so it stays.
+#
+# pytest-asyncio was dropped: the suite is entirely synchronous and nothing
+# imports it.
+
+# Testing
+pytest>=7.4,<10
+pytest-cov>=4.1
+cryptography>=41
+
+# Static analysis
+bandit>=1.7
+
+# Formatting and linting
+black>=23.0
+flake8>=6.0
+mypy>=1.5
+
+# Lock file generation
+pip-tools>=7.0
