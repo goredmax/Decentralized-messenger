@@ -110,9 +110,16 @@ pip-compile --generate-hashes --allow-unsafe \
 ### Известные ограничения
 
 - Независимого аудита нет
-- Официальные тест-вектора Signal и RFC в репозиторий **не положены**.
-  Примитивы проверяются кросс-валидацией против независимой реализации
-  (`cryptography`) в `tests/test_primitives.py` — это не замена векторам
+- **Официальных тест-вектор Signal для X3DH и Double Ratchet не существует.**
+  Signal не публикует их: ни в [X3DH rev 1](https://signal.org/docs/specifications/x3dh/),
+  ни в [Double Ratchet rev 4](https://signal.org/docs/specifications/doubleratchet/)
+  нет приложения с тест-векторами — оба документа заканчиваются разделом
+  References. Поэтому составные протоколы проверяются только кросс-валидацией
+  против `cryptography` и round-trip тестами
+- Примитивы же проверены по **опубликованным векторам RFC**: HKDF-SHA256
+  (RFC 5869, включая промежуточный PRK), X25519 (RFC 7748), Ed25519 (RFC 8032) —
+  см. `tests/test_vectors.py`. Это не замена аудиту, но это внешняя точка
+  отсчёта, а не согласие двух реализаций
 - Защита от глобальной корреляции трафика требует mixnet, её нет
 - Тайминг-анализ на уровне приложения не закрыт полностью
 
@@ -135,6 +142,7 @@ python -m pytest tests/ -v
 | `tests/test_double_ratchet.py` | Порядок `KDF_CK`, out-of-order, откат состояния, валидация заголовка, границы skipped keys |
 | `tests/test_from_state.py` | Восстановление сессии: продолжение диалога после перезагрузки, отказ на повреждённом состоянии, согласованность `dh_local_pub`/`dh_local_priv` |
 | `tests/test_primitives.py` | Кросс-валидация HKDF и X25519 против `cryptography` |
+| `tests/test_vectors.py` | Опубликованные вектора RFC 5869 (HKDF), RFC 7748 (X25519), RFC 8032 (Ed25519) + закрепление констант протокола |
 
 ## Лицензия
 

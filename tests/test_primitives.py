@@ -8,9 +8,15 @@ implementation proves nothing. These tests therefore check the results against
 ``cryptography``, a separate implementation of the same standards.
 
 Scope of the guarantee: this shows the primitives agree with a second
-implementation on the inputs exercised here. It is *not* a conformance claim
-against the published Signal or RFC test vectors, which are not vendored in
-this repository. Adding them remains worthwhile.
+implementation on the inputs exercised here. Agreement between two
+implementations is weaker than conformance to a specification -- both could be
+wrong the same way -- so the primitives are *also* checked against published
+RFC test vectors in ``tests/test_vectors.py``. Prefer that file for conformance
+questions; this one is the independent-implementation cross-check.
+
+Neither file covers X3DH or the Double Ratchet as compositions, because Signal
+publishes no test vectors for them. See the module docstring of
+``tests/test_vectors.py``.
 """
 
 import nacl.utils
