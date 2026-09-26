@@ -100,6 +100,35 @@ class PreKeyStore(abc.ABC):
         """Return some available prekey without consuming it, or ``None``."""
 
     @abc.abstractmethod
+    def reserve_next(self) -> Optional[OneTimePreKey]:
+        """
+        Take a prekey out of circulation and return it.
+
+        A prekey server must never hand the same one-time prekey to two
+        clients: the second handshake would then be refused by :meth:`consume`,
+        which turns a server bug into a denial of service against a legitimate
+        peer. Reserving at publication time is what makes "hand out exactly
+        once" hold across the gap between publishing a bundle and the handshake
+        arriving.
+
+        A reserved key remains consumable, and :meth:`release` returns it to
+        circulation for the case where the handshake never arrives.
+
+        Returns:
+            A reserved prekey, or ``None`` if the pool is empty.
+        """
+
+    @abc.abstractmethod
+    def release(self, key_id: int) -> None:
+        """
+        Return a reserved prekey to circulation.
+
+        Raises:
+            PreKeyStoreError: the key was already consumed and therefore cannot
+                be released. That is a programming error, not a transient state.
+        """
+
+    @abc.abstractmethod
     def count(self) -> int:
         """Return the number of prekeys still available for use."""
 
@@ -147,6 +176,7 @@ class InMemoryPreKeyStore(PreKeyStore):
     def __init__(self) -> None:
         self._used: Dict[int, bool] = {}
         self._keys: Dict[int, OneTimePreKey] = {}
+        self._reserved: set = set()
         self._lock = threading.Lock()
 
     def put(self, key: OneTimePreKey) -> None:
@@ -167,7 +197,33 @@ class InMemoryPreKeyStore(PreKeyStore):
             if key is None:
                 raise NoSuchPreKey(f'unknown prekey id {key_id}')
             self._used[key_id] = True
+            self._reserved.discard(key_id)
             return key
+
+    def reserve_next(self) -> Optional[OneTimePreKey]:
+        with self._lock:
+            available = sorted(set(self._keys) - self._reserved)
+            if not available:
+                return None
+            key_id = available[0]
+            self._reserved.add(key_id)
+            return self._keys[key_id]
+
+    def release(self, key_id: int) -> None:
+        with self._lock:
+            if key_id in self._used:
+                raise PreKeyStoreError(
+                    f'prekey id {key_id} was already consumed and cannot be '
+                    f'released'
+                )
+            if key_id not in self._keys:
+                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+            self._reserved.discard(key_id)
+
+    def reserved_ids(self):
+        """Test helper: ids currently held out of circulation."""
+        with self._lock:
+            return sorted(self._reserved)
 
     def peek(self, key_id: int) -> OneTimePreKey:
         with self._lock:
@@ -181,10 +237,17 @@ class InMemoryPreKeyStore(PreKeyStore):
             return key
 
     def peek_any(self) -> Optional[OneTimePreKey]:
+        """
+        Return an available prekey without consuming or reserving it.
+
+        Reserved keys are skipped: a caller asking which key to hand out must
+        not be handed one that is already committed to a peer.
+        """
         with self._lock:
-            if not self._keys:
+            available = sorted(set(self._keys) - self._reserved)
+            if not available:
                 return None
-            return self._keys[min(self._keys)]
+            return self._keys[available[0]]
 
     def count(self) -> int:
         with self._lock:
