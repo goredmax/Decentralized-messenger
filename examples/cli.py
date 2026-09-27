@@ -46,7 +46,6 @@ from typing import List, Optional, Tuple
 # Running the file directly puts examples/ on sys.path, not the repository root,
 # so the package would not be importable without an install. After
 # `pip install -e .` this branch is not taken.
-from src.storage.store import PersistentPQPreKeyStore
 if __package__ in (None, ''):  # pragma: no cover - depends on invocation
     sys.path.insert(
         0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,6 +76,7 @@ from src.storage.container import Container, KdfParams, StorageError  # noqa: E4
 from src.storage.store import (  # noqa: E402
     IdentityStore,
     PeerDirectory,
+    PersistentPQPreKeyStore,
     PersistentPreKeyStore,
     SessionStore,
     peer_id,
