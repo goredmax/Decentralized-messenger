@@ -40,7 +40,23 @@ implementation is therefore **trust on first use**: the first distribution
 message seen from a given sender in a group is accepted and remembered, and any
 later message must carry the same key id or it is reported as untrusted rather
 than accepted. That is strictly better than accepting whatever arrives, and it
-is not the same as full key transparency. See docs/SECURITY_BOUNDARIES.md.
+is not the same as full key transparency.
+
+Two holes are left by that, and both are addressed by
+:mod:`src.protocol.transparency` rather than here:
+
+- **A replay of the chain already held is invisible.** Trust on first use
+  recognises a chain id it has seen, so the server can roll a member back onto the
+  chain it already trusts -- the compromised one. The first distribution looks
+  right and nothing ever says otherwise.
+- **Every rotation needs a human.** Confirming a rotation out of band is a social
+  process, and social processes fail at inconvenient times.
+
+:meth:`SenderKeySessionBuilder.process` takes an optional ``attestation`` for
+this. With one, a rotation the log has recorded is adopted without a decision and
+a replay is refused. What that does *not* give is the ability to learn what one
+has not been shown: the transparency module lists what it detects and what it
+cannot.
 
 Rotation
 --------
@@ -51,6 +67,7 @@ the new distribution; sending it to the other members is the caller's job, since
 that means pairwise handshakes and transport.
 """
 
+import abc
 import hashlib
 import hmac
 from dataclasses import dataclass, replace
@@ -103,6 +120,73 @@ class SenderKeySkippedTooFar(SenderKeyError):
 
     #: How many iterations a receiver will derive in one catch-up.
     MAX_CATCH_UP = MAX_SKIP
+
+
+class AttestationStatus:
+    """
+    What a log says about a chain, in the four states that matter.
+
+    A plain class of constants rather than an enum because these cross the module
+    boundary and an enum from here would be a type callers have to import to
+    compare against.
+    """
+
+    #: The log's latest entry for this sender is exactly this chain.
+    CURRENT = 'current'
+    #: The log has a newer chain for this sender, so this one was rolled back.
+    STALE = 'stale'
+    #: The log has never heard of this chain id for this sender.
+    UNATTESTED = 'unattested'
+    #: The log itself does not hold together: a broken link or a bad signature.
+    INCONSISTENT = 'inconsistent'
+
+
+class RollbackDetected(SenderKeyError):
+    """
+    Raised when a log says a newer chain exists and an older one arrived.
+
+    Distinct from :class:`UntrustedSenderKey`, which is the caller being asked to
+    decide. This is the caller being told: an attestation that has already been
+    checked disagrees with the chain in hand, and no out-of-band confirmation
+    should be able to wave it through without the user seeing why.
+    """
+
+
+class InconsistentLog(SenderKeyError):
+    """
+    Raised when a log cannot be verified against what the client already holds.
+
+    A broken link between two entries, an index that does not follow, or a
+    signature that does not verify. Whatever the cause, the log cannot be used to
+    justify trusting anything, so it is an error rather than a "no opinion".
+    """
+
+
+class ChainAttestation(abc.ABC):
+    """
+    Something that can say which chain a sender's latest is.
+
+    Defined here, in the module that consumes it, and implemented in
+    :mod:`src.protocol.transparency`, so that the dependency runs one way. The
+    alternative -- transparency importing the builder to plug itself in -- would
+    be a cycle, and a cycle between the two would mean neither could be read
+    without the other.
+
+    An implementation must be honest about what it does not know. Reporting
+    ``CURRENT`` for a chain it has not seen would be worse than reporting
+    ``UNATTESTED``, because the first is trusted and the second only means the
+    caller has to decide.
+    """
+
+    @abc.abstractmethod
+    def check(self, message: 'SenderKeyDistributionMessage') -> str:
+        """
+        Report which of :class:`AttestationStatus` describes ``message``.
+
+        Raises:
+            SenderKeyError: the attestation cannot be evaluated, which is a
+                different thing from evaluating it to ``UNATTESTED``.
+        """
 
 
 @dataclass(frozen=True)
@@ -572,7 +656,10 @@ class SenderKeySessionBuilder:
         self._trusted: Dict[SenderKeyId, Set[bytes]] = {}
 
     def process(
-        self, message: SenderKeyDistributionMessage
+        self,
+        message: SenderKeyDistributionMessage,
+        *,
+        attestation: Optional[ChainAttestation] = None,
     ) -> Tuple[SenderKeyId, bool]:
         """
         Adopt or reject a distribution message.
@@ -581,13 +668,42 @@ class SenderKeySessionBuilder:
         changes the chain id while leaving the key id alone, so a replayed older
         chain and a genuine rotation are both detectable here.
 
+        Args:
+            message: the distribution message from a member.
+            attestation: an optional log that can say whether this chain is the
+                sender's current one. With one, a rotation no longer needs an
+                out-of-band decision -- the log has already vouched for it -- and
+                a *replay of the chain we already hold* becomes detectable at
+                all, which is the case plain trust on first use cannot see,
+                because the replayed chain is the trusted one.
+
         Returns:
             ``(key_id, untrusted)``; ``untrusted`` True means nothing changed and
-            the caller has to decide. A rotation therefore has to be confirmed
-            out of band, which is the safe direction to fail in.
+            the caller has to decide. Without an attestation, a rotation therefore
+            has to be confirmed out of band, which is the safe direction to fail
+            in.
+
+        Raises:
+            RollbackDetected: the attestation says a newer chain exists and this
+                is the older one.
+            InconsistentLog: the attestation itself does not hold together.
         """
         key_id = message.key_id
         known = self._trusted.setdefault(key_id, set())
+
+        if attestation is not None:
+            status = attestation.check(message)
+            if status == AttestationStatus.INCONSISTENT:
+                raise InconsistentLog(
+                    'the log could not be verified against what this member '
+                    'already holds, so it cannot justify trusting a chain'
+                )
+            if status == AttestationStatus.STALE:
+                raise RollbackDetected(
+                    'the log records a newer chain for this sender in this '
+                    'group, so the distribution message in hand is a replay of '
+                    'an older one'
+                )
 
         if message.chain_id in known:
             # The same chain we already accepted. Only ever move forward, so a
@@ -599,19 +715,33 @@ class SenderKeySessionBuilder:
                 existing.chain_key = message.chain_key
                 existing.iteration = message.iteration
                 existing.chain_id = message.chain_id
+            if attestation is not None and \
+                    status == AttestationStatus.UNATTESTED:
+                # The log has not seen this chain, which means it is not the one
+                # the log knows about -- but it is the one we already trust, so
+                # refusing it would break a conversation the log is only being
+                # added to. Reported instead, and the caller can act on it.
+                return key_id, True
             return key_id, False
 
         if not known:
             # The first chain we ever see from this sender in this group. Adopt
             # it: there is nothing to compare against yet, and refusing every
-            # first contact would make the protocol unusable.
+            # first contact would make the protocol unusable. A log that says a
+            # *newer* chain exists was already caught above.
             known.add(message.chain_id)
             self._sessions[key_id] = SenderKeySession.from_distribution(message)
             return key_id, False
 
         # A second, different chain from a sender we already trust in this
         # group. That is either a rotation, which the caller must confirm, or a
-        # replay of something we dropped. Never accepted silently.
+        # replay of something we dropped. Never accepted silently -- except when
+        # a log has already attested this one, which is the whole point of
+        # attaching it: the rotation is then evidenced rather than assumed.
+        if attestation is not None and status == AttestationStatus.CURRENT:
+            known.add(message.chain_id)
+            self._sessions[key_id] = SenderKeySession.from_distribution(message)
+            return key_id, False
         return key_id, True
 
     def get_session(self, key_id: SenderKeyId) -> SenderKeySession:

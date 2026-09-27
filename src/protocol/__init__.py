@@ -7,4 +7,12 @@ structures between processes, which is a different set of concerns and a
 different set of mistakes.
 """
 
-__all__ = ['limits', 'padding', 'sender_key', 'session', 'verifier', 'wire']
+__all__ = [
+    'limits',
+    'padding',
+    'sender_key',
+    'session',
+    'transparency',
+    'verifier',
+    'wire',
+]

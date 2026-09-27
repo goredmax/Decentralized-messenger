@@ -764,17 +764,26 @@ def test_a_wrong_algorithm_key_is_not_accepted_as_a_prekey():
 
 def test_engaging_the_pool_never_returns_a_spent_key(tmp_path):
     """
-    Reserve, then consume something else, then reserve again.
+    Reserve, consume something else, reserve again.
 
-    The last reservation must not be the key that was already spent, and must
-    not be one that is already advertised.
+    The last reservation must be neither the key already spent nor one already
+    advertised. Written to be independent of the random 64-bit prekey ids:
+    picking "the last available" would sometimes pick the reserved one, since
+    ``available_ids`` is sorted and the ids are not.
     """
     store, _ = persistent_store(tmp_path)
     store.replenish(0, 3)
     first = store.reserve_next()
-    store.consume(store.available_ids()[-1])
+
+    spare = next(
+        key_id for key_id in store.available_ids()
+        if key_id not in {first.key_id, *store.reserved_ids()}
+    )
+    store.consume(spare)
+
     second = store.reserve_next()
     assert second.key_id != first.key_id
+    assert second.key_id != spare
     assert not store.was_consumed(second.key_id)
     # reserved_ids is sorted, and the ids are random.
     assert store.reserved_ids() == sorted([first.key_id, second.key_id])
