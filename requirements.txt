@@ -12,16 +12,17 @@ cryptography>=41.0.0
 # P2P networking
 libp2p>=0.2.0
 
-# Tor integration
+# Tor integration (SOCKS5 via stem + requests)
 stem>=1.8.0
-tor-request>=3.0.0
+requests[socks]>=2.31.0
 
 # Async networking
 aiohttp>=3.8.0
 aiortc>=1.5.0  # For WebRTC support
 
-# Database with encryption support
-sqlcipher-legacy>=4.5.0
+# Database with encryption support (maintained SQLCipher binding;
+# use sqlcipher3-binary on Windows to avoid source builds)
+sqlcipher3>=0.5.0
 orjson>=3.9.0  # Fast JSON serialization
 
 # Testing

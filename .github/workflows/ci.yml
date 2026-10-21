@@ -51,7 +51,8 @@ jobs:
       run: pip install bandit
     
     - name: Run bandit security lint
-      run: bandit -r src/ -f json -o bandit-report.json || true
+      run: bandit -r src/ -f json -o bandit-report.json --severity-level medium --confidence-level medium
+      # CI fails on medium+ findings; report artifact uploaded below
     
     - name: Upload bandit report
       uses: actions/upload-artifact@v3
@@ -73,7 +74,8 @@ jobs:
       run: pip install pip-audit
     
     - name: Run pip-audit
-      run: pip-audit -r requirements.txt -f json -o pip-audit-report.json || true
+      run: pip-audit -r requirements.txt -f json -o pip-audit-report.json
+      # CI fails on any known-vulnerable dependency
     
     - name: Upload audit report
       uses: actions/upload-artifact@v3

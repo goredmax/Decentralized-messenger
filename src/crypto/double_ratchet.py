@@ -123,7 +123,10 @@ class DoubleRatchet:
     
     def _dh(self, private: public.PrivateKey, pub: bytes) -> bytes:
         """Perform X25519 Diffie-Hellman."""
-        return public.Box(private, public.PublicKey(pub))._shared_key
+        # Public API instead of private Box._shared_key attribute
+        return nacl.bindings.crypto_scalarmult(
+            bytes(private), bytes(public.PublicKey(pub))
+        )
     
     def _kdf_rk(self, root_key: bytes, dh_output: bytes) -> Tuple[bytes, bytes]:
         """
@@ -137,8 +140,11 @@ class DoubleRatchet:
         # HKDF-Extract: PRK = HMAC-SHA256(salt=root_key, msg=dh_output)
         prk = hmac.new(root_key, dh_output, hashlib.sha256).digest()
         
-        # HKDF-Expand: OKM = HMAC-SHA256(PRK, info || 0x01)
-        okm = hmac.new(prk, HKDF_INFO + b'\x01', hashlib.sha256).digest()
+        # HKDF-Expand: 64 bytes = two HMAC-SHA256 blocks (RFC 5869).
+        # A single block yields only 32 bytes — okm[32:64] would be EMPTY.
+        t1 = hmac.new(prk, HKDF_INFO + b'\x01', hashlib.sha256).digest()
+        t2 = hmac.new(prk, t1 + HKDF_INFO + b'\x02', hashlib.sha256).digest()
+        okm = t1 + t2
         
         # Split into two 32-byte keys
         return okm[:32], okm[32:64]
@@ -157,6 +163,9 @@ class DoubleRatchet:
     
     def _perform_dh_ratchet_as_sender(self):
         """Generate new ephemeral key and derive sending chain."""
+        # Save PN (count of previous sending chain) BEFORE resetting.
+        self._state.prev_send_count = self._state.send_msg_count
+
         # Generate new ephemeral keypair
         new_dh_private = public.PrivateKey.generate()
         self._dh_private = new_dh_private
@@ -175,7 +184,7 @@ class DoubleRatchet:
         )
         self._state.send_msg_count = 0
     
-    def _perform_dh_ratchet_as_receiver(self, new_remote_dh: bytes):
+    def _perform_dh_ratchet_as_receiver(self, new_remote_dh: bytes, remote_pn: int):
         """
         Perform DH ratchet when receiving a message with new DH key.
         
@@ -189,7 +198,7 @@ class DoubleRatchet:
         # First DH ratchet: derive receiving chain from old root key
         if self._state.dh_remote_pub is not None:
             # We had a previous remote key, skip those messages first
-            self._skip_message_keys(self._state.prev_send_count)
+            self._skip_message_keys(remote_pn)
         
         # DH with sender's new public key using our current private key
         dh_output = self._dh(self._dh_private, new_remote_dh)
@@ -234,6 +243,13 @@ class DoubleRatchet:
             key_id = (bytes(self._state.dh_remote_pub).hex(), self._state.recv_msg_count)
             self._state.skipped_keys[key_id] = mk
             self._state.recv_msg_count += 1
+
+            # Enforce the global cap AT INSERTION TIME (DoS protection).
+            # Evict by (dh_pub, n): lowest counter first within a chain.
+            if len(self._state.skipped_keys) > MAX_SKIP:
+                oldest = min(self._state.skipped_keys.keys(),
+                             key=lambda k: (k[0], k[1]))
+                del self._state.skipped_keys[oldest]
         
         self._state.recv_chain_key = ck
     
@@ -298,6 +314,19 @@ class DoubleRatchet:
         """
         dh_hex = header['dh']
         msg_num = header['n']
+        remote_pn = header.get('pn', 0)
+
+        # --- Validate header BEFORE using it ---
+        try:
+            new_dh_bytes = bytes.fromhex(dh_hex)
+        except (ValueError, TypeError):
+            raise InvalidHeaderError("DH field is not valid hex")
+        if len(new_dh_bytes) != 32:
+            raise InvalidHeaderError("DH public key must be 32 bytes")
+        if not (isinstance(msg_num, int) and isinstance(remote_pn, int)):
+            raise InvalidHeaderError("PN/N must be integers")
+        if not (0 <= msg_num < 2 ** 32) or not (0 <= remote_pn < 2 ** 32):
+            raise InvalidHeaderError("PN/N out of range")
         
         # Serialize header for AD verification
         header_bytes = self._serialize_header(header)
@@ -311,12 +340,6 @@ class DoubleRatchet:
         if key_id in self._state.skipped_keys:
             message_key = self._state.skipped_keys.pop(key_id)
             
-            # Limit skipped keys size
-            if len(self._state.skipped_keys) > MAX_SKIP:
-                # Remove oldest entry
-                oldest_key = min(self._state.skipped_keys.keys())
-                del self._state.skipped_keys[oldest_key]
-            
             # Decrypt with skipped key
             return self._do_decrypt(message_key, nonce, ciphertext, ad)
         
@@ -324,8 +347,9 @@ class DoubleRatchet:
         current_dh_hex = self._state.dh_remote_pub.hex() if self._state.dh_remote_pub else None
         if dh_hex != current_dh_hex:
             # Perform DH ratchet with sender's new DH public key
-            new_remote_dh = bytes.fromhex(dh_hex)
-            self._perform_dh_ratchet_as_receiver(new_remote_dh)
+            # Pass remote_pn so pending messages in the OLD receiving
+            # chain are skipped (Signal spec), not our own PN.
+            self._perform_dh_ratchet_as_receiver(new_dh_bytes, remote_pn)
         
         # Step 3: Skip message keys up to header.n
         if msg_num < self._state.recv_msg_count:
@@ -349,7 +373,7 @@ class DoubleRatchet:
             plaintext = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
                 ciphertext, ad, nonce, message_key
             )
-        except Exception:
+        except nacl.exceptions.CryptoError:
             raise DecryptionError("AEAD decryption failed - message corrupted or tampered")
         
         return plaintext
@@ -357,13 +381,24 @@ class DoubleRatchet:
     def _serialize_header(self, header: dict) -> bytes:
         """Serialize header to bytes for AD."""
         # Simple deterministic serialization: dh||pn||n
+        if not (0 <= header['pn'] < 2 ** 32):
+            raise InvalidHeaderError("PN out of range")
+        if not (0 <= header['n'] < 2 ** 32):
+            raise InvalidHeaderError("N out of range")
         dh = bytes.fromhex(header['dh'])
+        if len(dh) != 32:
+            raise InvalidHeaderError("DH public key must be 32 bytes")
         pn_bytes = header['pn'].to_bytes(4, 'big')
         n_bytes = header['n'].to_bytes(4, 'big')
         return dh + pn_bytes + n_bytes
 
 
 # Custom exceptions
+class InvalidHeaderError(Exception):
+    """Raised when a message header fails validation."""
+    pass
+
+
 class TooManySkippedMessagesError(Exception):
     """Raised when trying to skip more than MAX_SKIP messages (DoS protection)."""
     pass

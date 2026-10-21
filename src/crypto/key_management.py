@@ -86,7 +86,8 @@ class RemotePublicKey:
 class Box:
     """
     Implements authenticated encryption using NaCl box.
-    Combines X25519 key exchange with AES-256-GCM encryption.
+    Combines X25519 key exchange with XSalsa20-Poly1305 AEAD
+    (libsodium crypto_box construction).
     Provides forward secrecy when used with Double Ratchet.
     """
     
@@ -148,7 +149,11 @@ def generate_shared_secret(private_key: PrivateKey,
     Generate shared secret using X25519 ECDH.
     Used as basis for Double Ratchet protocol.
     """
-    return public.Box(private_key, public_key)._shared_key
+    # Public binding instead of private Box._shared_key attribute
+    import nacl.bindings
+    return nacl.bindings.crypto_scalarmult(
+        bytes(private_key), bytes(public_key)
+    )
 
 
 # Example usage

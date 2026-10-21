@@ -7,6 +7,7 @@ X3DH (Extended Triple Diffie-Hellman) Implementation
 """
 
 import os
+import secrets
 from typing import Tuple, Optional
 from dataclasses import dataclass
 import nacl
@@ -19,12 +20,17 @@ import hmac
 
 @dataclass
 class PreKeyBundle:
-    """Набор预ключей для X3DH handshake"""
-    identity_key: PublicKey  # IK_B
-    signed_prekey: PublicKey  # SPK_B
-    signed_prekey_signature: bytes  # Signature(SP K_B)
+    """Набор prekey'ев для X3DH handshake"""
+    identity_key: VerifyKey  # IK_B (Ed25519 verify key!)
+    signed_prekey: PublicKey  # SPK_B (X25519)
+    signed_prekey_signature: bytes  # Signature_SPK by IK_B (Ed25519)
     one_time_prekey: Optional[PublicKey] = None  # OPK_B (опционально)
     one_time_prekey_id: Optional[int] = None
+
+
+class InvalidPreKeyBundleError(Exception):
+    """Raised when a prekey bundle fails validation (bad signature, bad lengths)."""
+    pass
 
 
 @dataclass
@@ -70,7 +76,9 @@ class X3DH:
         
         Возвращает: (prekey_id, opk_private, opk_public)
         """
-        prekey_id = int.from_bytes(os.urandom(4), 'big')
+        # secrets.randbelow вместо int.from_bytes(os.urandom(...)):
+        # единый криптографически стойкий источник, диапазон [0, 2**32)
+        prekey_id = secrets.randbelow(2 ** 32)
         opk_private = PrivateKey.generate()
         opk_public = opk_private.public_key
         
@@ -127,6 +135,21 @@ class X3DH:
         Returns:
             (state, ephemeral_public_key)
         """
+        # --- КРИТИЧНО: проверяем подпись SPK ДО любых DH-операций ---
+        # Без этой проверки активный MITM может подменить bundle и
+        # установить сессию от имени Bob.
+        if len(bundle.signed_prekey.encode()) != 32:
+            raise InvalidPreKeyBundleError("SPK must be a 32-byte X25519 key")
+        try:
+            bundle.identity_key.verify(
+                bundle.signed_prekey.encode(),
+                bundle.signed_prekey_signature,
+            )
+        except CryptoError:
+            raise InvalidPreKeyBundleError(
+                "SPK signature verification failed — possible MITM"
+            )
+
         # Для DH операций нам нужен private key в формате X25519
         # Identity key - это Ed25519 signing key, конвертируем в X25519
         identity_private_x = PrivateKey(identity_private.to_curve25519_private_key().encode())
