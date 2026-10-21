@@ -27,6 +27,7 @@ from src.crypto.x3dh import (
 )
 
 
+from src.crypto.pq import stocked_pq_store
 def build(prekey=True, associated_data=b'', prekey_id=1):
     """Build a responder and an unconfirmed initiator session."""
     x3dh = X3DH()
@@ -39,6 +40,7 @@ def build(prekey=True, associated_data=b'', prekey_id=1):
         identity_private=bob_private,
         signed_prekey_private=spk_private,
         prekey_store=store,
+        pq_prekey_store=stocked_pq_store(),
     )
     alice_private, _ = x3dh.generate_identity_keys()
     session, init = x3dh.begin(

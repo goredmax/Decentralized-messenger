@@ -16,6 +16,7 @@ from src.crypto.prekey_store import (
     OneTimePreKey,
     OneTimePreKeyAlreadyUsed,
     PreKeyStore,
+    PreKeyStoreError,
     generate_prekey_id,
     make_one_time_prekey,
 )
@@ -122,6 +123,83 @@ class TestConcurrency:
             thread.join()
 
         assert len(winners) == 1
+
+
+class TestReservation:
+    """
+    A prekey server must never hand the same one-time prekey to two clients.
+
+    The second handshake would then be refused by consume, which is a denial of
+    service against a legitimate peer caused by nothing more than a naive
+    server. Reserve-on-publish is what closes that gap between advertising a
+    bundle and the handshake arriving.
+    """
+
+    def test_reserve_next_takes_a_key_out_of_circulation(self):
+        store = InMemoryPreKeyStore()
+        store.put(make_one_time_prekey(key_id=1))
+        store.put(make_one_time_prekey(key_id=2))
+        taken = store.reserve_next()
+        assert taken.key_id == 1
+        assert store.reserved_ids() == [1]
+        assert store.reserve_next().key_id == 2
+
+    def test_peek_skips_reserved(self):
+        store = InMemoryPreKeyStore()
+        store.put(make_one_time_prekey(key_id=1))
+        store.put(make_one_time_prekey(key_id=2))
+        store.reserve_next()
+        assert store.peek_any().key_id == 2
+
+    def test_reserve_next_on_empty_pool(self):
+        assert InMemoryPreKeyStore().reserve_next() is None
+
+    def test_reserved_key_is_still_consumable(self):
+        """Reservation holds it back from *other* peers, not from its own."""
+        store = InMemoryPreKeyStore()
+        store.put(make_one_time_prekey(key_id=1))
+        store.reserve_next()
+        assert store.consume(1).key_id == 1
+
+    def test_release_returns_it(self):
+        store = InMemoryPreKeyStore()
+        store.put(make_one_time_prekey(key_id=1))
+        store.reserve_next()
+        store.release(1)
+        assert store.reserved_ids() == []
+        assert store.peek_any().key_id == 1
+
+    def test_release_of_a_consumed_key_is_an_error(self):
+        store = InMemoryPreKeyStore()
+        store.put(make_one_time_prekey(key_id=1))
+        store.reserve_next()
+        store.consume(1)
+        with pytest.raises(PreKeyStoreError):
+            store.release(1)
+
+    def test_release_of_unknown_key(self):
+        with pytest.raises(NoSuchPreKey):
+            InMemoryPreKeyStore().release(99)
+
+    def test_concurrent_reservations_are_distinct(self):
+        store = InMemoryPreKeyStore()
+        for index in range(8):
+            store.put(make_one_time_prekey(key_id=index))
+        taken = []
+        barrier = threading.Barrier(8)
+
+        def attempt():
+            barrier.wait()
+            key = store.reserve_next()
+            if key is not None:
+                taken.append(key.key_id)
+
+        threads = [threading.Thread(target=attempt) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert len(set(taken)) == 8
 
 
 class TestValueObject:

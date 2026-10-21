@@ -27,7 +27,7 @@ import threading
 from typing import Dict, List, Optional
 
 from nacl.public import PrivateKey, PublicKey
-from nacl.signing import SigningKey
+from nacl.signing import SigningKey, VerifyKey
 
 from ..crypto.prekey_store import (
     NoSuchPreKey,
@@ -35,6 +35,15 @@ from ..crypto.prekey_store import (
     OneTimePreKeyAlreadyUsed,
     PreKeyStore,
     PreKeyStoreError,
+)
+from ..crypto.pq import (
+    NoSuchPQPreKey,
+    PQError,
+    PQOneTimePreKey,
+    PQPreKeyAlreadyUsed,
+    PQPreKeyExhausted,
+    PQPreKeyStore,
+    generate_prekey as generate_pq_prekey,
 )
 from .container import Container, StorageError
 
@@ -72,6 +81,7 @@ class PersistentPreKeyStore(PreKeyStore):
         self._lock = threading.Lock()
         self._keys: Dict[int, OneTimePreKey] = {}
         self._used: Dict[int, bool] = {}
+        self._reserved: set = set()
         self._epoch = 0
         self._load()
 
@@ -102,8 +112,12 @@ class PersistentPreKeyStore(PreKeyStore):
                 key_id=key_id, private_key=private, public_key=public
             )
         used = {int(value) for value in document.get('used') or []}
+        reserved = {int(value) for value in document.get('reserved') or []}
         self._keys = keys
         self._used = {key_id: True for key_id in used}
+        # A reservation on a consumed key is meaningless, and trusting a file
+        # that claims otherwise would let a reservation be silently lost.
+        self._reserved = reserved - set(self._used)
 
     def _flush(self) -> None:
         document = {
@@ -116,6 +130,7 @@ class PersistentPreKeyStore(PreKeyStore):
                 for key in self._keys.values()
             ],
             'used': sorted(self._used),
+            'reserved': sorted(self._reserved),
         }
         self._epoch += 1
         self._container.store(
@@ -179,9 +194,42 @@ class PersistentPreKeyStore(PreKeyStore):
 
     def peek_any(self) -> Optional[OneTimePreKey]:
         with self._lock:
-            if not self._keys:
+            available = [key_id for key_id in sorted(self._keys)
+                         if key_id not in self._reserved]
+            if not available:
                 return None
-            return self._keys[min(self._keys)]
+            return self._keys[available[0]]
+
+    def reserve_next(self) -> Optional[OneTimePreKey]:
+        with self._lock:
+            available = [key_id for key_id in sorted(self._keys)
+                         if key_id not in self._reserved]
+            if not available:
+                return None
+            key_id = available[0]
+            self._reserved.add(key_id)
+            try:
+                self._flush()
+            except Exception:
+                self._reserved.discard(key_id)
+                raise
+            return self._keys[key_id]
+
+    def release(self, key_id: int) -> None:
+        with self._lock:
+            if key_id in self._used:
+                raise PreKeyStoreError(
+                    f'prekey id {key_id} was already consumed and cannot be '
+                    f'released'
+                )
+            if key_id not in self._keys:
+                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+            self._reserved.discard(key_id)
+            self._flush()
+
+    def reserved_ids(self) -> List[int]:
+        with self._lock:
+            return sorted(self._reserved)
 
     def count(self) -> int:
         with self._lock:
@@ -219,6 +267,201 @@ class PersistentPreKeyStore(PreKeyStore):
     @property
     def epoch(self) -> int:
         """Current epoch, for a caller that wants to anchor it externally."""
+        with self._lock:
+            return self._epoch
+
+
+class PersistentPQPreKeyStore(PQPreKeyStore):
+    """
+    A post-quantum prekey pool behind a container.
+
+    The same properties as :class:`PersistentPreKeyStore`, for the same reasons:
+    sealed on disk, single-use enforced by an atomic consume, and **not** atomic
+    across processes, because there are no file locks. Stated rather than
+    implied, exactly as in the module docstring.
+
+    Each key is stored as its 64-byte serialised form. That is the whole private
+    key, so this container is as sensitive as the identity one and is treated
+    the same way.
+    """
+
+    def __init__(self, container: Container, minimum_epoch: Optional[int] = None):
+        self._container = container
+        self._minimum_epoch = minimum_epoch
+        self._lock = threading.Lock()
+        self._prekeys: Dict[int, 'PQOneTimePreKey'] = {}
+        self._consumed: set = set()
+        self._reserved: set = set()
+        self._epoch = 0
+        self._load()
+
+    def _load(self) -> None:
+        epoch, raw = self._container.load(minimum_epoch=self._minimum_epoch)
+        self._epoch = epoch
+        if not raw:
+            return
+        try:
+            document = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise StorageError(
+                'post-quantum prekey payload is not valid JSON'
+            ) from exc
+        entries = document.get('prekeys')
+        if not isinstance(entries, dict):
+            raise StorageError(
+                'post-quantum prekey payload has no prekeys object'
+            )
+        for key_id, encoded in entries.items():
+            try:
+                numeric = int(key_id)
+            except (TypeError, ValueError) as exc:
+                raise StorageError(
+                    f'post-quantum prekey id {key_id!r} is not an integer'
+                ) from exc
+            try:
+                self._prekeys[numeric] = PQOneTimePreKey.from_seed(
+                    numeric, _unb64(encoded, 'post-quantum prekey')
+                )
+            except PQError as exc:
+                raise StorageError(
+                    f'post-quantum prekey {numeric} could not be restored'
+                ) from exc
+        consumed = document.get('consumed') or []
+        if not isinstance(consumed, list):
+            raise StorageError('consumed must be a list of prekey ids')
+        for value in consumed:
+            try:
+                self._consumed.add(int(value))
+            except (TypeError, ValueError) as exc:
+                raise StorageError(
+                    f'consumed entry {value!r} is not an integer'
+                ) from exc
+
+    def _flush(self) -> None:
+        document = {
+            'prekeys': {
+                str(key_id): _b64(prekey.seed)
+                for key_id, prekey in sorted(self._prekeys.items())
+            },
+            # Spent ids are recorded, not just deleted. Without them a rolled
+            # back file would make an already-used prekey available again, and a
+            # prekey that is used twice is a prekey whose contribution is
+            # recoverable from two handshakes -- which is the entire property
+            # this pool exists to provide.
+            'consumed': sorted(self._consumed),
+        }
+        self._epoch += 1
+        self._container.store(
+            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+        )
+
+    def put(self, prekey: 'PQOneTimePreKey') -> None:
+        with self._lock:
+            if not isinstance(prekey, PQOneTimePreKey):
+                raise StorageError('put expects a PQOneTimePreKey')
+            if prekey.key_id in self._prekeys or prekey.key_id in self._consumed:
+                raise StorageError(
+                    f'post-quantum prekey {prekey.key_id} is already known'
+                )
+            self._prekeys[prekey.key_id] = prekey
+            self._flush()
+
+    def consume(self, key_id: int) -> 'PQOneTimePreKey':
+        with self._lock:
+            if key_id in self._consumed:
+                raise PQPreKeyAlreadyUsed(
+                    f'post-quantum prekey {key_id} was already used; accepting '
+                    f'it would destroy the forward secrecy the ML-KEM '
+                    f'contribution exists to provide'
+                )
+            try:
+                prekey = self._prekeys.pop(key_id)
+            except KeyError:
+                raise NoSuchPQPreKey(
+                    f'unknown post-quantum prekey {key_id}'
+                ) from None
+            self._consumed.add(key_id)
+            self._reserved.discard(key_id)
+            self._flush()
+            return prekey
+
+    def peek(self, key_id: int) -> 'PQOneTimePreKey':
+        with self._lock:
+            if key_id in self._consumed:
+                raise NoSuchPQPreKey(
+                    f'post-quantum prekey {key_id} was already used'
+                )
+            try:
+                return self._prekeys[key_id]
+            except KeyError:
+                raise NoSuchPQPreKey(
+                    f'unknown post-quantum prekey {key_id}'
+                ) from None
+
+    def peek_any(self) -> Optional['PQOneTimePreKey']:
+        with self._lock:
+            for key_id, prekey in self._prekeys.items():
+                if key_id not in self._reserved:
+                    return prekey
+            return None
+
+    def reserve_next(self) -> Optional['PQOneTimePreKey']:
+        with self._lock:
+            for key_id, prekey in self._prekeys.items():
+                if key_id not in self._reserved:
+                    self._reserved.add(key_id)
+                    return prekey
+            return None
+
+    def release(self, key_id: int) -> None:
+        with self._lock:
+            if key_id in self._consumed:
+                raise PQPreKeyAlreadyUsed(
+                    f'post-quantum prekey {key_id} was already used'
+                )
+            if key_id not in self._prekeys:
+                raise NoSuchPQPreKey(
+                    f'unknown post-quantum prekey {key_id}'
+                )
+            self._reserved.discard(key_id)
+
+    def reserved_ids(self) -> List[int]:
+        with self._lock:
+            return sorted(self._reserved)
+
+    def count(self) -> int:
+        with self._lock:
+            return len(self._prekeys)
+
+    def available_ids(self) -> List[int]:
+        with self._lock:
+            return sorted(self._prekeys)
+
+    def was_consumed(self, key_id: int) -> bool:
+        with self._lock:
+            return key_id in self._consumed
+
+    def replenish(self, low_water_mark: int, target: int = None) -> int:
+        target = target if target is not None else low_water_mark * 2
+        if target <= 0:
+            raise PQPreKeyExhausted(
+                'a replenishment target must be positive'
+            )
+        with self._lock:
+            added = 0
+            while len(self._prekeys) < target:
+                candidate = generate_pq_prekey()
+                if candidate.key_id in self._prekeys or \
+                        candidate.key_id in self._consumed:
+                    continue
+                self._prekeys[candidate.key_id] = candidate
+                added += 1
+            if added:
+                self._flush()
+            return added
+
+    @property
+    def epoch(self) -> int:
         with self._lock:
             return self._epoch
 
@@ -411,3 +654,128 @@ class SessionStore:
                 name for name in os.listdir(self._directory)
                 if name.endswith('.session')
             )
+
+
+def peer_id(identity) -> str:
+    """
+    The stable id a peer is known by: the hex of its Ed25519 identity key.
+
+    :class:`SessionStore` is keyed by an opaque string, and something has to
+    decide what that string is. The identity key is the only value available on
+    both sides of a conversation before any session exists, and it is what
+    :class:`PeerDirectory` indexes, so the two stay in step.
+    """
+    if not isinstance(identity, VerifyKey):
+        raise StorageError('peer_id expects a VerifyKey')
+    return bytes(identity).hex()
+
+
+class PeerDirectory:
+    """
+    Who this client has conversations with, and which side each one started on.
+
+    Both facts are needed to restore a session and neither is in the persisted
+    ratchet state: :meth:`Session.from_state` requires the peer's identity key,
+    because the associated data is derived from it, and the role, because the
+    role fixes the order of the two identity keys in that same associated data.
+    A :class:`SessionStore` alone therefore cannot bring a conversation back --
+    it can store the state and hand it out, but nothing could say whose it is or
+    which way round it was created. That is what this fills.
+
+    The peer list is metadata: it says who talks to whom and which of them
+    started each conversation. It is sealed in a container for that reason, not
+    merely for tidiness.
+    """
+
+    def __init__(self, container: Container, minimum_epoch: Optional[int] = None):
+        self._container = container
+        self._minimum_epoch = minimum_epoch
+        self._lock = threading.Lock()
+        self._peers: Dict[str, bool] = {}
+        self._epoch = 0
+        self._load()
+
+    def _load(self) -> None:
+        epoch, raw = self._container.load(minimum_epoch=self._minimum_epoch)
+        self._epoch = epoch
+        if not raw:
+            return
+        try:
+            document = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise StorageError('peer directory payload is not valid JSON') from exc
+        peers = document.get('peers')
+        if not isinstance(peers, dict):
+            raise StorageError('peer directory payload has no peers object')
+        for identifier, entry in peers.items():
+            if not isinstance(identifier, str) or len(identifier) != 64:
+                raise StorageError(f'peer id {identifier!r} is not 32-byte hex')
+            if not isinstance(entry, dict) or \
+                    not isinstance(entry.get('is_initiator'), bool):
+                raise StorageError(
+                    f'peer {identifier} has no usable is_initiator flag'
+                )
+            self._peers[identifier] = entry['is_initiator']
+
+    def _flush(self) -> None:
+        document = {
+            'peers': {
+                identifier: {'is_initiator': is_initiator}
+                for identifier, is_initiator in sorted(self._peers.items())
+            }
+        }
+        self._epoch += 1
+        self._container.store(
+            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+        )
+
+    def set(self, identity: VerifyKey, *, is_initiator: bool) -> None:
+        """
+        Record a peer and the role this side had with it.
+
+        Re-recording an existing peer with the same role is a no-op on disk; a
+        different role overwrites, because a role change means a new handshake
+        replaced the old session and the newest fact is the useful one.
+        """
+        identifier = peer_id(identity)
+        with self._lock:
+            if self._peers.get(identifier) == is_initiator:
+                return
+            self._peers[identifier] = is_initiator
+            self._flush()
+
+    def role_of(self, identity: VerifyKey) -> Optional[bool]:
+        """
+        Which side this client was in the conversation with ``identity``.
+
+        Returns:
+            ``True`` if this client started it, ``False`` if it answered, and
+            ``None`` if the peer is unknown.
+        """
+        with self._lock:
+            return self._peers.get(peer_id(identity))
+
+    def is_known(self, identity: VerifyKey) -> bool:
+        return self.role_of(identity) is not None
+
+    def remove(self, identity: VerifyKey) -> None:
+        """Forget a peer. Its session, if any, is the caller's to delete."""
+        identifier = peer_id(identity)
+        with self._lock:
+            if identifier not in self._peers:
+                return
+            del self._peers[identifier]
+            self._flush()
+
+    def peers(self) -> List[VerifyKey]:
+        """Every known peer, as identity keys, in a stable order."""
+        with self._lock:
+            return [
+                VerifyKey(bytes.fromhex(identifier))
+                for identifier in sorted(self._peers)
+            ]
+
+    @property
+    def epoch(self) -> int:
+        with self._lock:
+            return self._epoch

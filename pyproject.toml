@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The project stopped being a pile of scripts and became an installable
+# package. There was no build file at all before: it could not be installed,
+# no wheel could be built, and no entry point declared. The scripts ran only
+# because pytest.ini put the repository root on sys.path, which is a test
+# setting the rest of the codebase was silently borrowing.
+
+[project]
+name = "decentralized-messenger"
+version = "0.1.0"
+description = "Decentralized messenger with E2EE: X3DH, Double Ratchet, Sender Keys"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "goredmax" }]
+keywords = ["e2ee", "x3dh", "double-ratchet", "signal-protocol", "messaging"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+]
+# This list must stay identical to requirements.in. The lock file is compiled
+# from requirements.in while pip reads the metadata here, so changing one
+# without the other makes the two install paths disagree. The comment is in the
+# file on purpose: two sources of truth with nothing linking them drift
+# silently, and this is a cryptography repository.
+#
+# Development dependencies are deliberately not duplicated into
+# optional-dependencies: requirements-dev.in and requirements-dev.lock remain
+# their only source of truth, and CI installs from the lock.
+dependencies = ["PyNaCl>=1.5,<2", "cryptography>=42,<51"]
+
+[tool.setuptools]
+# An explicit list, not discovery: a directory someone drops into src/ and
+# forgets must not silently become an installed package. src.tor and src.p2p
+# are included on purpose -- those imports already worked, they simply have
+# nothing in them yet (see docs/SECURITY_BOUNDARIES.md).
+packages = [
+    "src",
+    "src.crypto",
+    "src.p2p",
+    "src.protocol",
+    "src.storage",
+    "src.tor",
+]

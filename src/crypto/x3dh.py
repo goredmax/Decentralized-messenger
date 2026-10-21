@@ -42,6 +42,17 @@ from nacl.signing import SigningKey, VerifyKey
 from .kdf import extract as kdf_extract
 from .kdf import expand as kdf_expand
 from .key_management import identity_private_x25519, identity_public_x25519
+from .pq import (
+    CIPHERTEXT_LEN as PQ_CIPHERTEXT_LEN,
+    NoSuchPQPreKey,
+    PQError,
+    PQPreKeyExhausted,
+    PQPreKeyStore,
+    decapsulate as pq_decapsulate,
+    encapsulate as pq_encapsulate,
+    generate_prekey as generate_pq_prekey,
+    load_public_key as pq_load_public_key,
+)
 from .prekey_store import OneTimePreKey, PreKeyStore
 
 # Domain separation for the initiator signature transcript.
@@ -127,13 +138,21 @@ def _u32(value: int) -> bytes:
     return value.to_bytes(4, 'big')
 
 
-def _length_prefixed(*chunks: Optional[bytes]) -> bytes:
+def length_prefixed(*chunks: Optional[bytes]) -> bytes:
     """
     Concatenate chunks with explicit length prefixes.
 
     Length prefixing keeps the encoding unambiguous, so no two different field
     sets can produce the same byte string. Without it a signature could be
     replayed against a differently split set of fields.
+
+    Public, because :mod:`src.protocol.session` builds its AEAD associated data
+    out of the same kind of object: an ordered set of fields that has to be
+    canonically encoded before it can be hashed. Two implementations of a
+    canonicalisation primitive on either side of a MAC are precisely the
+    failure this repository already paid for once, when the X3DH and Double
+    Ratchet call sites carried separate copies of HKDF and one of them was
+    wrong in a way that no round-trip test noticed (see :mod:`src.crypto.kdf`).
     """
     out = bytearray()
     for chunk in chunks:
@@ -150,22 +169,36 @@ def _init_transcript(
     identity_key_x25519: PublicKey,
     ephemeral_key: PublicKey,
     one_time_prekey_id: Optional[int],
+    pq_ciphertext: Optional[bytes],
+    pq_prekey_id: Optional[int],
     associated_data: bytes,
 ) -> bytes:
     """
     Canonical transcript covered by the initiator's handshake signature.
 
     Binds the identity key, both of its curve representations, the ephemeral
-    key, the referenced prekey id and any external associated data.
+    key, the referenced prekey id, the post-quantum ciphertext and the
+    post-quantum prekey id, and any external associated data.
+
+    The post-quantum ciphertext is in here and that is the whole reason the
+    handshake carries it in the clear. A ciphertext that is not covered by the
+    signature can be replaced by an active attacker with one the attacker
+    generated itself, and then the attacker knows the ML-KEM secret while the two
+    honest parties do not share it. Covering it costs 1088 bytes of hashing per
+    handshake and removes the cheapest possible post-quantum downgrade.
     """
     opk = (None if one_time_prekey_id is None
            else one_time_prekey_id.to_bytes(8, 'big'))
-    return _length_prefixed(
+    pq_id = (None if pq_prekey_id is None
+             else pq_prekey_id.to_bytes(8, 'big'))
+    return length_prefixed(
         INIT_TRANSCRIPT_LABEL,
         bytes(identity_key),
         bytes(identity_key_x25519),
         bytes(ephemeral_key),
         opk,
+        pq_ciphertext,
+        pq_id,
         associated_data,
     )
 
@@ -178,6 +211,16 @@ class PreKeyBundle:
     ``signed_prekey_signature`` must be an Ed25519 signature over the raw
     32-byte ``signed_prekey``, as produced by
     :meth:`X3DH.generate_signed_prekey`.
+
+    ``pq_prekey`` is a one-time ML-KEM-768 encapsulation key. It is *not*
+    optional in practice: a bundle without one produces a session whose forward
+    secrecy does not survive a future break of X25519, and
+    :meth:`X3DHResponder.publish_bundle` refuses to hand one out unless the
+    caller says explicitly that a non-post-quantum session is acceptable.
+
+    The post-quantum key is 1184 bytes and the X25519 material is 128, so a
+    bundle is roughly ten times larger than it was. That is the cost of the
+    property, paid in bytes on every handshake.
     """
 
     identity_key: VerifyKey
@@ -188,6 +231,9 @@ class PreKeyBundle:
     #: Monotonic counter identifying the current signed prekey. Zero means
     #: "not tracked", which leaves the signature as the only check.
     signed_prekey_id: int = 0
+    #: One-time ML-KEM-768 encapsulation key, and the id it is published under.
+    pq_prekey: Optional[object] = None
+    pq_prekey_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         if len(bytes(self.identity_key)) != _DH_LEN:
@@ -210,6 +256,14 @@ class PreKeyBundle:
             raise InvalidHandshakeError(
                 'signed_prekey_id must be a non-negative int'
             )
+        if (self.pq_prekey is None) != (self.pq_prekey_id is None):
+            raise InvalidHandshakeError(
+                'pq_prekey and pq_prekey_id must both be set or unset'
+            )
+        if self.pq_prekey is not None:
+            # Checked through the pq module's loader rather than by isinstance
+            # here, so the length and the type are both validated in one place.
+            pq_load_public_key(self.pq_prekey.public_bytes_raw())
 
 
 @dataclass(frozen=True)
@@ -221,6 +275,16 @@ class HandshakeInit:
     :meth:`transcript`. This is the only structure :meth:`X3DH.receive_handshake`
     accepts, so a handshake cannot be processed without proof that the sender
     owns the identity key it names.
+
+    ``pq_ciphertext`` is the ML-KEM-768 ciphertext the initiator encapsulated
+    against the responder's post-quantum prekey, 1088 bytes. It travels here
+    because the responder has no other way to learn it, and it is inside the
+    signed transcript because otherwise an active attacker could replace it with
+    a ciphertext of its own choosing: the initiator would still have produced a
+    real ciphertext, the attacker would decapsulate it, and both sides would
+    derive a root key the other does not share -- a downgrade the key
+    confirmation would then catch, but only after the fact and with no way to
+    tell a quantum adversary from a broken peer.
     """
 
     identity_key: VerifyKey
@@ -228,6 +292,8 @@ class HandshakeInit:
     ephemeral_key: PublicKey
     signature: bytes
     one_time_prekey_id: Optional[int] = None
+    pq_ciphertext: Optional[bytes] = None
+    pq_prekey_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -245,6 +311,18 @@ class HandshakeInit:
             0 <= self.one_time_prekey_id < 2 ** 64
         ):
             raise InvalidHandshakeError('one_time_prekey_id out of range')
+        if (self.pq_ciphertext is None) != (self.pq_prekey_id is None):
+            raise InvalidHandshakeError(
+                'pq_ciphertext and pq_prekey_id must both be set or unset'
+            )
+        if self.pq_ciphertext is not None and \
+                len(self.pq_ciphertext) != PQ_CIPHERTEXT_LEN:
+            raise InvalidHandshakeError(
+                f'pq_ciphertext must be {PQ_CIPHERTEXT_LEN} bytes, got '
+                f'{len(self.pq_ciphertext)}'
+            )
+        if self.pq_prekey_id is not None and not (0 <= self.pq_prekey_id < 2 ** 64):
+            raise InvalidHandshakeError('pq_prekey_id out of range')
 
     def transcript(self, associated_data: bytes = b'') -> bytes:
         """Canonical, length-prefixed byte string covered by ``signature``."""
@@ -253,6 +331,8 @@ class HandshakeInit:
             self.identity_key_x25519,
             self.ephemeral_key,
             self.one_time_prekey_id,
+            self.pq_ciphertext,
+            self.pq_prekey_id,
             associated_data,
         )
 
@@ -275,33 +355,81 @@ class HandshakeInit:
             ) from exc
 
 
+@dataclass(frozen=True)
+class DhPart:
+    """
+    One contribution to the shared secret, with the name of what produced it.
+
+    The label is not decoration. Every contribution here is 32 bytes, so a KDF
+    handed four of them cannot tell "three X25519 outputs plus a one-time
+    prekey" from "three X25519 outputs plus an ML-KEM secret" -- both are four
+    32-byte values, and both would produce the same root key from the same
+    buffer. That is the ambiguity this type exists to remove: the KDF mixes the
+    labels in, so swapping an ML-KEM contribution for an X25519 one changes the
+    derived key instead of vanishing into it.
+    """
+
+    label: bytes
+    value: bytes
+
+    def __post_init__(self) -> None:
+        if len(self.value) != _DH_LEN:
+            raise InvalidHandshakeError(
+                f'DH output must be {_DH_LEN} bytes, got {len(self.value)}'
+            )
+        if not isinstance(self.label, (bytes, bytearray)):
+            raise InvalidHandshakeError('a DH part label must be bytes')
+
+
+#: Labels for the contributions, in the order they are mixed in. Fixed strings so
+#: that the set of combinations a handshake can produce is a closed list rather
+#: than whatever a caller passes.
+LABEL_IK_SPK = b'DH1'
+LABEL_EK_IK = b'DH2'
+LABEL_EK_SPK = b'DH3'
+LABEL_EK_OPK = b'DH4'
+LABEL_KEM = b'PQ'
+
+
 @dataclass
 class X3DHState:
     """
     One side's handshake result.
 
-    The individual DH outputs are kept rather than only their concatenation, so
-    the KDF step cannot be handed an ambiguous buffer. Use :meth:`master_key` to
+    The individual contributions are kept as :class:`DhPart` rather than only
+    their concatenation, so the KDF step cannot be handed an ambiguous buffer and
+    cannot mistake one prekey arrangement for another. Use :meth:`master_key` to
     derive the 32-byte root key for the Double Ratchet.
     """
 
-    dh_parts: Tuple[bytes, ...]
+    dh_parts: Tuple[DhPart, ...]
     ephemeral_key: Optional[PrivateKey] = None
     identity_key: Optional[VerifyKey] = None
     one_time_prekey_id: Optional[int] = None
+    pq_prekey_id: Optional[int] = None
+    pq_ciphertext: Optional[bytes] = None
 
     def master_key(self, context: bytes = DEFAULT_CONTEXT) -> bytes:
         return X3DH.derive_master_key(self.dh_parts, context)
 
     @property
+    def is_post_quantum(self) -> bool:
+        """Whether the shared secret includes an ML-KEM contribution."""
+        return any(part.label == LABEL_KEM for part in self.dh_parts)
+
+    @property
     def shared_secret(self) -> bytes:
         """
-        Raw concatenation of the DH outputs, without F and without the KDF.
+        Raw concatenation of the contributions, without F and without the KDF.
 
-        Kept for tests and debugging. Never use it as a message or root key;
-        use :meth:`master_key`.
+        Kept for tests and debugging. Never use it as a message or root key; use
+        :meth:`master_key`. The labels are included, so this is not the same
+        buffer for two different prekey arrangements.
         """
-        return b''.join(self.dh_parts)
+        return b''.join(
+            len(part.label).to_bytes(4, 'big') + part.label + part.value
+            for part in self.dh_parts
+        )
 
 
 @dataclass(frozen=True)
@@ -358,7 +486,7 @@ def confirmation_mac(
     a confirmation cannot be replayed against a different session or a
     substituted identity key.
     """
-    transcript = X25519_F + _length_prefixed(
+    transcript = X25519_F + length_prefixed(
         associated_data,
         bytes(alice_identity),
         bytes(alice_ephemeral),
@@ -406,8 +534,55 @@ class X3DHSession:
         return self._is_confirmed
 
     @property
+    def initiator_identity(self) -> VerifyKey:
+        """
+        Identity key of the side that started the handshake.
+
+        Raises:
+            InvalidHandshakeError: the session was built without identities, so
+                there is nothing to bind associated data to. Returning None
+                would push the failure into the AEAD, where it would be
+                indistinguishable from a wrong message key.
+        """
+        if self._alice_identity is None:
+            raise InvalidHandshakeError(
+                'this X3DH session carries no initiator identity key'
+            )
+        return self._alice_identity
+
+    @property
+    def responder_identity(self) -> VerifyKey:
+        """
+        Identity key of the side that answered the handshake.
+
+        Raises:
+            InvalidHandshakeError: the session was built without identities.
+        """
+        if self._bob_identity is None:
+            raise InvalidHandshakeError(
+                'this X3DH session carries no responder identity key'
+            )
+        return self._bob_identity
+
+    @property
     def one_time_prekey_id(self) -> Optional[int]:
         return self._state.one_time_prekey_id
+
+    @property
+    def pq_prekey_id(self) -> Optional[int]:
+        """Which post-quantum prekey this handshake spent, if any."""
+        return self._state.pq_prekey_id
+
+    @property
+    def is_post_quantum(self) -> bool:
+        """
+        Whether the root key includes an ML-KEM contribution.
+
+        False means the session's forward secrecy ends the day X25519 is broken,
+        however it was configured. Worth asking rather than assuming, and worth
+        recording for a session that was accepted on an explicit opt-in.
+        """
+        return self._state.is_post_quantum
 
     @property
     def root_key(self) -> bytes:
@@ -519,6 +694,17 @@ class X3DH:
             public_key=private_key.public_key,
         )
 
+    @staticmethod
+    def generate_pq_prekey(key_id: Optional[int] = None):
+        """
+        Generate a single-use ML-KEM-768 prekey.
+
+        See :mod:`src.crypto.pq` for the primitive and, more importantly, for
+        why a post-quantum prekey is held to the same single-use discipline as
+        the X25519 one.
+        """
+        return generate_pq_prekey(key_id)
+
     # ------------------------------------------------------------------
     # Bundle authentication
     # ------------------------------------------------------------------
@@ -578,12 +764,18 @@ class X3DH:
         identity_private: SigningKey,
         ephemeral: PrivateKey,
         bundle: PreKeyBundle,
-    ) -> Tuple[bytes, ...]:
+    ) -> Tuple[DhPart, ...]:
         """
         DH1 = DH(IK_A, SPK_B)
         DH2 = DH(EK_A, IK_B)
         DH3 = DH(EK_A, SPK_B)
         DH4 = DH(EK_A, OPK_B)   -- only when the bundle carries a one-time prekey
+        PQ  = KEM(EK_A, PQK_B)  -- only when the bundle carries a PQ prekey
+
+        The post-quantum ciphertext is returned alongside rather than kept on
+        ``self``: a state object that carried a side effect would make
+        :meth:`_initiator_dh_parts` unsafe to call twice, and the caller needs
+        the ciphertext anyway.
         """
         identity_private_x = identity_private_x25519(identity_private)
         # The bundle's Ed25519 identity key is converted for the DH2 input. The
@@ -591,40 +783,69 @@ class X3DH:
         identity_public_x = identity_public_x25519(bundle.identity_key)
 
         parts = [
-            self._dh(identity_private_x, bundle.signed_prekey),
-            self._dh(ephemeral, identity_public_x),
-            self._dh(ephemeral, bundle.signed_prekey),
+            DhPart(LABEL_IK_SPK,
+                   self._dh(identity_private_x, bundle.signed_prekey)),
+            DhPart(LABEL_EK_IK,
+                   self._dh(ephemeral, identity_public_x)),
+            DhPart(LABEL_EK_SPK,
+                   self._dh(ephemeral, bundle.signed_prekey)),
         ]
         if bundle.one_time_prekey is not None:
-            parts.append(self._dh(ephemeral, bundle.one_time_prekey))
-        return tuple(parts)
+            parts.append(DhPart(
+                LABEL_EK_OPK, self._dh(ephemeral, bundle.one_time_prekey)
+            ))
+        ciphertext = None
+        if bundle.pq_prekey is not None:
+            shared, ciphertext = pq_encapsulate(
+                pq_load_public_key(bundle.pq_prekey.public_bytes_raw())
+            )
+            parts.append(DhPart(LABEL_KEM, shared))
+        return tuple(parts), ciphertext
 
     def _responder_dh_parts(
         self,
         identity_private: SigningKey,
         signed_prekey_private: PrivateKey,
         one_time_prekey_private: Optional[PrivateKey],
+        pq_prekey_private,
+        pq_ciphertext: Optional[bytes],
         init: HandshakeInit,
-    ) -> Tuple[bytes, ...]:
+    ) -> Tuple[DhPart, ...]:
         """
         DH1 = DH(SPK_B, IK_A)
         DH2 = DH(IK_B, EK_A)
         DH3 = DH(SPK_B, EK_A)
         DH4 = DH(OPK_B, EK_A)   -- only when a one-time prekey is present
+        PQ  = Decaps(PQK_B, ct)  -- only when a PQ prekey is referenced
         """
         identity_private_x = identity_private_x25519(identity_private)
 
         parts = [
-            self._dh(signed_prekey_private, init.identity_key_x25519),
-            self._dh(identity_private_x, init.ephemeral_key),
-            self._dh(signed_prekey_private, init.ephemeral_key),
+            DhPart(LABEL_IK_SPK,
+                   self._dh(signed_prekey_private, init.identity_key_x25519)),
+            DhPart(LABEL_EK_IK,
+                   self._dh(identity_private_x, init.ephemeral_key)),
+            DhPart(LABEL_EK_SPK,
+                   self._dh(signed_prekey_private, init.ephemeral_key)),
         ]
         if init.one_time_prekey_id is not None:
             if one_time_prekey_private is None:
                 raise InvalidHandshakeError(
                     'initiator referenced a one-time prekey but none was supplied'
                 )
-            parts.append(self._dh(one_time_prekey_private, init.ephemeral_key))
+            parts.append(DhPart(
+                LABEL_EK_OPK,
+                self._dh(one_time_prekey_private, init.ephemeral_key),
+            ))
+        if init.pq_prekey_id is not None:
+            if pq_prekey_private is None or pq_ciphertext is None:
+                raise InvalidHandshakeError(
+                    'initiator referenced a post-quantum prekey but none was '
+                    'supplied'
+                )
+            parts.append(DhPart(
+                LABEL_KEM, pq_decapsulate(pq_prekey_private, pq_ciphertext)
+            ))
         return tuple(parts)
 
     # ------------------------------------------------------------------
@@ -678,7 +899,9 @@ class X3DH:
             )
 
         ephemeral = PrivateKey.generate()
-        dh_parts = self._initiator_dh_parts(identity_private, ephemeral, bundle)
+        dh_parts, pq_ciphertext = self._initiator_dh_parts(
+            identity_private, ephemeral, bundle
+        )
         identity_public = identity_private.verify_key
 
         transcript = _init_transcript(
@@ -686,6 +909,8 @@ class X3DH:
             identity_public_x25519(identity_public),
             ephemeral.public_key,
             bundle.one_time_prekey_id,
+            pq_ciphertext,
+            bundle.pq_prekey_id,
             associated_data,
         )
         signature = identity_private.sign(transcript).signature
@@ -696,12 +921,16 @@ class X3DH:
             ephemeral_key=ephemeral.public_key,
             signature=signature,
             one_time_prekey_id=bundle.one_time_prekey_id,
+            pq_ciphertext=pq_ciphertext,
+            pq_prekey_id=bundle.pq_prekey_id,
         )
         state = X3DHState(
             dh_parts=dh_parts,
             ephemeral_key=ephemeral,
             identity_key=identity_public,
             one_time_prekey_id=bundle.one_time_prekey_id,
+            pq_prekey_id=bundle.pq_prekey_id,
+            pq_ciphertext=pq_ciphertext,
         )
         return state, init
 
@@ -712,6 +941,7 @@ class X3DH:
         one_time_prekey_private: Optional[PrivateKey],
         init: HandshakeInit,
         associated_data: bytes = b'',
+        pq_prekey_private=None,
     ) -> X3DHState:
         """
         Process an initiator handshake as the responder.
@@ -738,13 +968,16 @@ class X3DH:
             )
 
         dh_parts = self._responder_dh_parts(
-            identity_private, signed_prekey_private, one_time_prekey_private, init
+            identity_private, signed_prekey_private, one_time_prekey_private,
+            pq_prekey_private, init.pq_ciphertext, init,
         )
         return X3DHState(
             dh_parts=dh_parts,
             ephemeral_key=None,
             identity_key=init.identity_key,
             one_time_prekey_id=init.one_time_prekey_id,
+            pq_prekey_id=init.pq_prekey_id,
+            pq_ciphertext=init.pq_ciphertext,
         )
 
     def begin(
@@ -791,21 +1024,29 @@ class X3DH:
 
     @staticmethod
     def derive_master_key(
-        dh_parts: Sequence[bytes],
+        dh_parts: Sequence[DhPart],
         context: bytes = DEFAULT_CONTEXT,
     ) -> bytes:
         """
-        Derive the 32-byte root key from the individual DH outputs.
+        Derive the 32-byte root key from the individual contributions.
 
         The specification defines ``SK = KDF(F || DH1 || DH2 || DH3 || DH4)``
         with ``F = 0xFF * 32`` for X25519.
 
-        This takes the *separate* DH outputs rather than one concatenated
-        buffer on purpose. The 3-DH and 4-DH cases are 96 and 128 bytes, and the
-        already-prefixed 3-DH form ``F || DH1 || DH2 || DH3`` is also 128 bytes,
-        so a length-sniffing implementation cannot tell the last two apart and
-        will silently derive different keys on the two sides. Taking a sequence
-        removes the ambiguity.
+        This takes the *separate*, labelled contributions rather than one
+        concatenated buffer. Two reasons, and the second one appeared only when
+        post-quantum support was added:
+
+        - The 3-DH and 4-DH cases are 96 and 128 bytes, and the already-prefixed
+          3-DH form ``F || DH1 || DH2 || DH3`` is also 128 bytes, so a
+          length-sniffing implementation cannot tell the last two apart and will
+          silently derive different keys on the two sides. Taking a sequence
+          removes that ambiguity.
+        - Every contribution is 32 bytes, so with an ML-KEM secret in the mix a
+          KDF handed a bare buffer cannot tell "three X25519 outputs plus a
+          one-time prekey" from "three X25519 outputs plus an ML-KEM secret".
+          The labels are mixed in here, so the two arrangements produce
+          different keys instead of the same one.
 
         ``context`` is mixed in as the HKDF ``info``. The specification leaves
         ``info`` empty; a non-empty protocol-specific context is deliberate
@@ -814,8 +1055,9 @@ class X3DH:
         interchangeable with libsignal's.
 
         Raises:
-            TypeError: ``dh_parts`` is a single buffer, not a sequence of parts.
-            ValueError: wrong number of parts, or a part that is not 32 bytes.
+            TypeError: ``dh_parts`` is a single buffer, or bare 32-byte values,
+                not a sequence of :class:`DhPart`.
+            ValueError: a part is malformed.
         """
         if isinstance(dh_parts, (bytes, bytearray, memoryview)):
             raise TypeError(
@@ -824,17 +1066,45 @@ class X3DH:
                 'between the 3-DH and 4-DH cases'
             )
         parts = list(dh_parts)
-        if len(parts) not in (3, 4):
-            raise ValueError(f'X3DH uses 3 or 4 DH outputs, got {len(parts)}')
-        for index, part in enumerate(parts):
-            if len(part) != _DH_LEN:
-                raise ValueError(
-                    f'DH output {index} must be {_DH_LEN} bytes, got {len(part)}'
+        if not parts:
+            raise ValueError('X3DH has at least three DH outputs, got 0')
+        for part in parts:
+            if not isinstance(part, DhPart):
+                raise TypeError(
+                    'derive_master_key expects DhPart values with labels, not '
+                    f'bare 32-byte outputs: got {type(part).__name__}. A bare '
+                    'output carries no indication of which key produced it, so '
+                    'an ML-KEM contribution and an X25519 one would be '
+                    'indistinguishable.'
                 )
+            if len(part.value) != _DH_LEN:
+                raise ValueError(
+                    f'DH output {part.label!r} must be {_DH_LEN} bytes, got '
+                    f'{len(part.value)}'
+                )
+        labels = [part.label for part in parts]
+        if len(set(labels)) != len(labels):
+            # Two contributions with the same label means a caller assembled the
+            # handshake wrong, and mixing it in would silently produce a key
+            # neither specification nor this code has an opinion about.
+            raise ValueError(f'duplicate DH part labels: {labels}')
 
         salt = b'\x00' * _DH_LEN
-        prk = kdf_extract(salt, X25519_F + b''.join(parts))
+        prk = kdf_extract(salt, X25519_F + parts_value(parts))
         return kdf_expand(prk, context, _DH_LEN)
+
+
+def parts_value(parts: Sequence[DhPart]) -> bytes:
+    """
+    Length-prefixed label-and-value concatenation for the KDF input.
+
+    Public because it is what a transcript-equivalent computation needs, and
+    because a second implementation of it on the other side of an HKDF is the
+    exact failure :mod:`src.crypto.kdf` documents.
+    """
+    return b''.join(
+        _u32(len(part.label)) + part.label + part.value for part in parts
+    )
 
 
 @dataclass
@@ -842,14 +1112,23 @@ class X3DHResponder:
     """
     Responder side of X3DH, with single-use prekey enforcement.
 
-    Holds the long-term identity key, the active signed prekey and a
-    :class:`~src.crypto.prekey_store.PreKeyStore`. The store's atomic
-    ``consume`` is what makes a one-time prekey genuinely single use.
+    Holds the long-term identity key, the active signed prekey, an
+    :class:`~src.crypto.prekey_store.PreKeyStore` and a
+    :class:`~src.crypto.pq.PQPreKeyStore`. The stores' atomic ``consume`` is
+    what makes a one-time prekey genuinely single use, and the post-quantum
+    store is not optional: a bundle without an ML-KEM key produces a session
+    whose forward secrecy will not survive a future break of X25519.
+
+    Both pools are spent together and both are checked first. Handshakes
+    arrive in any order, so the alternative -- consume as you go -- burns an
+    X25519 prekey on a handshake that then fails for want of a post-quantum one,
+    which is a denial of service against every future session.
     """
 
     identity_private: SigningKey
     signed_prekey_private: PrivateKey
     prekey_store: PreKeyStore
+    pq_prekey_store: Optional[PQPreKeyStore] = None
     context: bytes = DEFAULT_CONTEXT
     signed_prekey_id: int = 0
 
@@ -866,8 +1145,17 @@ class X3DHResponder:
     def identity_public(self) -> VerifyKey:
         return self.identity_private.verify_key
 
+    @property
+    def is_post_quantum(self) -> bool:
+        """Whether this responder can hand out post-quantum prekeys."""
+        return self.pq_prekey_store is not None
+
     def publish_bundle(
-        self, *, allow_no_one_time_prekey: bool = False
+        self,
+        *,
+        allow_no_one_time_prekey: bool = False,
+        allow_no_pq: bool = False,
+        reserve: bool = True,
     ) -> PreKeyBundle:
         """
         Build the bundle to hand to an initiator.
@@ -878,20 +1166,36 @@ class X3DHResponder:
                 but has **no forward secrecy**, so it is opt-in rather than the
                 default. A caller that accepts the downgrade is expected to
                 record that it did.
+            allow_no_pq: permit returning a bundle with no post-quantum prekey.
+                The session then carries no ML-KEM contribution, so its forward
+                secrecy ends the day X25519 is broken. Opt-in for the same
+                reason: the caller has to be the one that decides a session
+                without it is acceptable, because the peer cannot tell.
+            reserve: take the prekeys out of circulation while they are
+                advertised. On by default. Without it, two calls hand out the
+                same prekey and the second handshake is refused by ``consume``,
+                which is a denial of service against a legitimate peer caused by
+                nothing more than a naive server. Use :meth:`release_bundle` to
+                return advertised prekeys when the handshake never arrives.
 
         Raises:
-            PrekeyPoolExhausted: the pool is empty and the caller did not opt in
-                to the weaker variant.
+            PrekeyPoolExhausted: the X25519 pool is empty and the caller did not
+                opt in to the weaker variant.
+            PQPreKeyExhausted: the post-quantum pool is empty, or this responder
+                has no post-quantum store, and the caller did not opt in.
 
-        Publication does not consume a one-time prekey: the handshake may never
-        arrive, and consuming here would silently shrink the pool. The atomic
-        decision happens in :meth:`handle_init`.
+        A reserved prekey stays consumable, so the handshake it was advertised
+        for still succeeds. What changes is that a *second* bundle cannot carry
+        it.
 
-        A production server must additionally *reserve* the prekey it hands out,
-        so two clients are never issued the same one. This reference
-        implementation does not model reservation; see the module docstring of
-        :mod:`src.crypto.prekey_store`.
+        Both pools are checked before either is reserved. Reserving the X25519
+        prekey and only then discovering the post-quantum pool is empty would
+        leave that prekey held out of circulation for a bundle that was never
+        published, and a client whose pool is low would lose one key per failed
+        attempt until it had none left -- a self-inflicted outage, and one an
+        attacker could trigger by simply letting the post-quantum pool run dry.
         """
+        # Look before leaping: availability first, reservation second.
         candidate = self.prekey_store.peek_any()
         if candidate is None and not allow_no_one_time_prekey:
             raise PrekeyPoolExhausted(
@@ -899,6 +1203,29 @@ class X3DHResponder:
                 'allow_no_one_time_prekey=True to accept a session without '
                 'forward secrecy'
             )
+
+        if self.pq_prekey_store is not None:
+            pq_available = self.pq_prekey_store.peek_any()
+        else:
+            pq_available = None
+        if pq_available is None and not allow_no_pq:
+            raise PQPreKeyExhausted(
+                'no post-quantum one-time prekeys available. A session without '
+                'one has no ML-KEM contribution, so its forward secrecy does '
+                'not survive a future break of X25519. Replenish the pool, give '
+                'this responder a PQPreKeyStore, or pass allow_no_pq=True to '
+                'accept that downgrade explicitly.'
+            )
+
+        if reserve:
+            candidate = self.prekey_store.reserve_next() if candidate else None
+            if self.pq_prekey_store is not None and pq_available is not None:
+                pq_candidate = self.pq_prekey_store.reserve_next()
+            else:
+                pq_candidate = None
+        else:
+            candidate, pq_candidate = candidate, pq_available
+
         return PreKeyBundle(
             identity_key=self.identity_public,
             signed_prekey=self._signed_prekey_public,
@@ -906,7 +1233,71 @@ class X3DHResponder:
             one_time_prekey=None if candidate is None else candidate.public_key,
             one_time_prekey_id=None if candidate is None else candidate.key_id,
             signed_prekey_id=self.signed_prekey_id,
+            pq_prekey=None if pq_candidate is None else pq_candidate.public_key,
+            pq_prekey_id=None if pq_candidate is None else pq_candidate.key_id,
         )
+
+    def release_bundle(self, bundle: PreKeyBundle) -> None:
+        """
+        Return the prekeys an advertised bundle carried to circulation.
+
+        For the case where the handshake never arrived. Once ``handle_init`` has
+        run a key is consumed and this raises, which is the intended way to
+        notice the mistake.
+
+        Raises:
+            PreKeyStoreError: an X25519 prekey was already consumed.
+            PQError: a post-quantum prekey was already consumed.
+        """
+        if bundle.one_time_prekey_id is not None:
+            self.prekey_store.release(bundle.one_time_prekey_id)
+        if bundle.pq_prekey_id is not None:
+            if self.pq_prekey_store is None:
+                raise PQError(
+                    'this bundle carried a post-quantum prekey but the '
+                    'responder has no post-quantum store'
+                )
+            self.pq_prekey_store.release(bundle.pq_prekey_id)
+
+    def _spend_prekeys(self, init: HandshakeInit) -> Tuple[Optional[OneTimePreKey],
+                                                           Optional[object]]:
+        """
+        Take the prekeys ``init`` references, in one step.
+
+        Both pools are checked before either is touched, so a handshake that
+        names an unavailable prekey costs nothing. Authentication has already
+        happened by the time this runs, which is the other half of why that
+        order matters: an unauthenticated handshake must not be able to spend
+        anything at all.
+
+        Raises:
+            NoSuchPreKey, OneTimePreKeyAlreadyUsed: the X25519 prekey.
+            NoSuchPQPreKey, PQPreKeyAlreadyUsed: the post-quantum prekey.
+        """
+        if init.one_time_prekey_id is not None:
+            one_time = self.prekey_store.peek(init.one_time_prekey_id)
+        else:
+            one_time = None
+
+        pq_private = None
+        if init.pq_prekey_id is not None:
+            if self.pq_prekey_store is None:
+                raise NoSuchPQPreKey(
+                    'the initiator referenced a post-quantum prekey and this '
+                    'responder has no post-quantum store; the handshake cannot '
+                    'be answered with a key both sides share'
+                )
+            pq_candidate = self.pq_prekey_store.peek(init.pq_prekey_id)
+            pq_private = pq_candidate.private_key
+
+        # Checked, now spent.
+        if one_time is not None:
+            one_time = self.prekey_store.consume(init.one_time_prekey_id)
+        if pq_private is not None:
+            pq_private = self.pq_prekey_store.consume(
+                init.pq_prekey_id
+            ).private_key
+        return one_time, pq_private
 
     def respond(
         self,
@@ -923,23 +1314,18 @@ class X3DHResponder:
         if not isinstance(init, HandshakeInit):
             raise InvalidHandshakeError('init must be a HandshakeInit')
 
-        # Authenticate BEFORE spending a prekey.
-        #
-        # Consuming first lets anyone drain the pool with forged handshakes.
+        # Authenticate BEFORE spending a prekey. See handle_init.
         init.verify(associated_data)
 
-        one_time_private: Optional[PrivateKey] = None
-        if init.one_time_prekey_id is not None:
-            one_time_private = self.prekey_store.consume(
-                init.one_time_prekey_id
-            ).private_key
+        one_time, pq_private = self._spend_prekeys(init)
 
         state = self._x3dh.receive_handshake(
             self.identity_private,
             self.signed_prekey_private,
-            one_time_private,
+            None if one_time is None else one_time.private_key,
             init,
             associated_data,
+            pq_prekey_private=pq_private,
         )
         return X3DHSession(
             state,
@@ -956,21 +1342,23 @@ class X3DHResponder:
         associated_data: bytes = b'',
     ) -> X3DHState:
         """
-        Verify and process an initiator handshake, consuming the one-time prekey.
+        Verify and process an initiator handshake, consuming the one-time prekeys.
 
-        The prekey is consumed atomically before the shared secret is computed,
-        so a replayed or duplicated handshake cannot reuse it.
+        The prekeys are consumed atomically before the shared secret is computed,
+        so a replayed or duplicated handshake cannot reuse them.
 
-        If the referenced prekey is already spent, the handshake is aborted. The
-        initiator's signature covers the prekey id, so the responder cannot
-        silently downgrade to the 3-DH variant: the initiator would derive a
+        If a referenced prekey is already spent, the handshake is aborted. The
+        initiator's signature covers both prekey ids, so the responder cannot
+        silently drop the post-quantum contribution: the initiator would derive a
         different root key. Recovery is a fresh handshake against a fresh
         bundle.
 
         Raises:
-            OneTimePreKeyAlreadyUsed: the referenced prekey was already spent.
-                Accepting it would destroy forward secrecy.
-            NoSuchPreKey: the referenced prekey id is unknown.
+            OneTimePreKeyAlreadyUsed: the referenced X25519 prekey was already
+                spent. Accepting it would destroy forward secrecy.
+            PQPreKeyAlreadyUsed: the referenced post-quantum prekey was already
+                spent, for the same reason.
+            NoSuchPreKey, NoSuchPQPreKey: a referenced prekey is unknown.
             InvalidSignatureError: the initiator failed authentication.
         """
         if not isinstance(init, HandshakeInit):
@@ -981,21 +1369,19 @@ class X3DHResponder:
         # Consuming first lets anyone burn the whole pool by sending forged
         # handshakes: each one would take a prekey and only then fail
         # verification, leaving the responder unable to accept genuine
-        # handshakes with forward secrecy.
+        # handshakes with forward secrecy. The same applies to the
+        # post-quantum pool, which is the one an attacker would most want to
+        # drain, since an empty pool means every later session has to be
+        # accepted without post-quantum protection or not at all.
         init.verify(associated_data)
 
-        one_time_private: Optional[PrivateKey] = None
-        if init.one_time_prekey_id is not None:
-            # Raises if the prekey was already used; that is a security event,
-            # not a recoverable condition, so it propagates.
-            one_time_private = self.prekey_store.consume(
-                init.one_time_prekey_id
-            ).private_key
+        one_time, pq_private = self._spend_prekeys(init)
 
         return self._x3dh.receive_handshake(
             self.identity_private,
             self.signed_prekey_private,
-            one_time_private,
+            None if one_time is None else one_time.private_key,
             init,
             associated_data,
+            pq_prekey_private=pq_private,
         )

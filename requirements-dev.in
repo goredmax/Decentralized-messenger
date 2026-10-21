@@ -1,16 +1,26 @@
 # Development and test dependencies.
 #
-# cryptography is a test-only dependency: tests/test_primitives.py uses it to
-# cross-validate our HKDF and X25519 against an independent implementation. That
-# check is what caught the empty-chain-key defect, so it stays.
+# requirements.in is included rather than repeated. It used to be a separate
+# list with its own copy of the runtime dependencies, which meant CI installed
+# only this file and quietly lost anything that was added to requirements.in
+# without also being added here -- cryptography being the dependency that
+# mattered, since PQXDH moved it into the runtime set.
+#
+# cryptography is listed explicitly as well. It arrives through requirements.in,
+# but pinning the test-side use explicitly is what stops a test that
+# cross-validates against an independent implementation from quietly depending
+# on a transitive edge.
 #
 # pytest-asyncio was dropped: the suite is entirely synchronous and nothing
 # imports it.
 
+# Runtime dependencies, which the tests also need.
+-r requirements.in
+
 # Testing
 pytest>=7.4,<10
 pytest-cov>=4.1
-cryptography>=41
+cryptography>=42,<51
 
 # Static analysis
 bandit>=1.7

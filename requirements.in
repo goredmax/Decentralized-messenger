@@ -18,3 +18,20 @@
 #   pip install --require-hashes -r requirements.lock
 
 PyNaCl>=1.5,<2
+
+# ML-KEM-768, for the post-quantum prekeys. This is the dependency the previous
+# version of this file refused to have: cryptography was test-only, on the
+# grounds that it existed to cross-validate our HKDF and X25519 against an
+# independent implementation. PQXDH needs ML-KEM at runtime, and neither the
+# standard library nor PyNaCl has an ML-KEM.
+#
+# The trade is deliberate and worth stating: an ML-KEM in PyNaCl would mean
+# implementing a lattice KEM here, which is a considerably worse deal than one
+# more dependency. The cross-validation use is unchanged, so this is now a
+# runtime dependency as well as a test one. The lower bound is 42, where the
+# mlkem module appeared; anything older has no ML-KEM at all.
+#
+# This list must stay identical to [project.dependencies] in pyproject.toml. The
+# lock file is compiled from here while pip reads the metadata there, so a change
+# to one without the other makes the two install paths disagree.
+cryptography>=42,<51

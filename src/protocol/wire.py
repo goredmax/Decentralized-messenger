@@ -33,7 +33,8 @@ bytes, and the first byte alone selects the format version.
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+import os
+from typing import Optional, Tuple
 
 from ..crypto.double_ratchet import PROTOCOL_VERSION
 from ..crypto.x3dh import (
@@ -43,27 +44,51 @@ from ..crypto.x3dh import (
     PreKeyBundle,
 )
 from ..crypto.key_management import identity_public_x25519
+from ..crypto.pq import PQError, load_public_key as load_pq_public_key
 from nacl.exceptions import BadSignatureError
 from nacl.public import PublicKey
 from nacl.signing import VerifyKey
 
+# Re-exported, not redefined: these are protocol-wide limits and they live in
+# src.protocol.limits because more than one module needs them. They stay
+# importable from here because this is where callers have always found them.
+from .limits import MAX_FRAME_BYTES, MAX_VARINT_SHIFT
+from .padding import DEFAULT_PROFILE, PaddingProfile
+
 #: Wire format version. Independent of PROTOCOL_VERSION: the session protocol
 #: version governs key derivation, this one governs byte layout. A session
 #: survives a wire format change.
-WIRE_VERSION = 1
+#:
+#: Version 3 added post-quantum support. A prekey bundle carries a one-time
+#: ML-KEM-768 encapsulation key and its id; an initial handshake carries the
+#: matching 1088-byte ciphertext and its id, both inside the initiator's signed
+#: transcript. Version 1 and 2 bundles are refused with :class:`UnsupportedVersion`
+#: rather than decoded, which matters more than usual here: a v1 plaintext has
+#: no length prefix, so unpadding one would read its first byte as a length and
+#: could return a plausible-looking fragment instead of failing. Inside the AEAD
+#: that prefix cannot be forged by an attacker, so the only way to reach that
+#: state is a version mismatch -- which is exactly what the version byte is for.
+WIRE_VERSION = 3
 
-#: Refuse frames larger than this before allocating. Ratchet messages are small;
-#: anything near this limit is an attack or a bug.
-MAX_FRAME_BYTES = 1 << 20  # 1 MiB
-
-#: Guard against absurd varints even inside a legal frame.
-MAX_VARINT_SHIFT = 63
+#: Post-quantum field widths, from src.crypto.pq. Duplicated as local names
+#: rather than imported because this module's rule is that a decoder pins its own
+#: expected sizes: an imported constant that changed would change what the
+#: decoder accepts, and the point of the check is to notice that the wire moved.
+PQ_PUBLIC_KEY_LEN = 1184
+PQ_CIPHERTEXT_LEN = 1088
 
 KEY_LEN = 32
 SIG_LEN = 64
 _MAC_LEN = 32
 _UINT32_MAX = 2 ** 32
 _UINT64_MAX = (1 << 64) - 1
+
+#: AEAD framing inside a ratchet message. A ciphertext shorter than nonce plus
+#: tag cannot be a message, and the ratchet would reject it; the wire refuses it
+#: first so the error names the real problem.
+_NONCE_LEN = 24
+_TAG_LEN = 16
+_MIN_CIPHERTEXT = _NONCE_LEN + _TAG_LEN
 
 
 class WireError(Exception):
@@ -233,6 +258,11 @@ def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
 
     The caller is responsible for having authenticated the bundle; encoding
     proves nothing.
+
+    The post-quantum encapsulation key is 1184 bytes, so a bundle with one is
+    about 1.4 KiB. That is the price of the property, on every handshake, and it
+    is worth stating as a size rather than leaving it to be discovered in a
+    profile.
     """
     payload = bytearray()
     payload += bytes(bundle.identity_key)
@@ -245,6 +275,12 @@ def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
         payload += bytes(bundle.one_time_prekey)
         payload += encode_varint(bundle.one_time_prekey_id)
     payload += encode_varint(bundle.signed_prekey_id)
+    if bundle.pq_prekey is None:
+        payload.append(0x00)
+    else:
+        payload.append(0x01)
+        payload += bundle.pq_prekey.public_bytes_raw()
+        payload += encode_varint(bundle.pq_prekey_id)
     return _encode_frame(KIND_PREKEY_BUNDLE, bytes(payload))
 
 
@@ -255,11 +291,13 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
     Raises:
         WireError: on any malformation. The returned bundle is not
             authenticated; call ``X3DH.verify_bundle`` on it.
+        InvalidField: the post-quantum key is present but not a usable
+            ML-KEM-768 encapsulation key.
     """
     _decode_header(data, (KIND_PREKEY_BUNDLE,))
     payload = _extract_payload(data, 0)
 
-    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1
+    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
             f'bundle payload of {len(payload)} bytes, minimum {expected_min}'
@@ -286,6 +324,30 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
 
     signed_prekey_id, offset = decode_varint(payload, offset)
 
+    has_pq = payload[offset]
+    offset += 1
+    if has_pq not in (0x00, 0x01):
+        raise InvalidField(f'pq_prekey flag must be 0 or 1, got {has_pq}')
+
+    pq_prekey = None
+    pq_prekey_id = None
+    if has_pq:
+        raw, offset = _read_exact(
+            payload, offset, PQ_PUBLIC_KEY_LEN, 'pq_prekey'
+        )
+        # Loaded through the pq module, which checks the length and the type.
+        # A DER SPKI would be the wrong choice here: load_der_public_key accepts
+        # an Ed25519 or X25519 SPKI and returns that type instead, so a bundle
+        # carrying a valid key of the wrong algorithm would decode into an
+        # object that looks like a key and is not one.
+        try:
+            pq_prekey = load_pq_public_key(raw)
+        except PQError as exc:
+            raise InvalidField(f'pq_prekey is not usable: {exc}') from exc
+        pq_prekey_id, offset = decode_varint(payload, offset)
+        if pq_prekey_id > _UINT64_MAX:
+            raise InvalidVarint('pq_prekey_id out of range')
+
     if offset != len(payload):
         raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
 
@@ -297,6 +359,8 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
             one_time_prekey=one_time_prekey,
             one_time_prekey_id=one_time_prekey_id,
             signed_prekey_id=signed_prekey_id,
+            pq_prekey=pq_prekey,
+            pq_prekey_id=pq_prekey_id,
         )
     except BadSignatureError as exc:  # pragma: no cover - guarded above
         raise InvalidField('malformed key material') from exc
@@ -314,6 +378,10 @@ def encode_handshake_init(init: HandshakeInit) -> bytes:
     derives it from ``identity_key`` and the initiator's signature covers the
     derived value, so putting it on the wire would only create a second copy
     that can disagree with the first.
+
+    The post-quantum ciphertext is transmitted, because the responder has no
+    other way to learn it. It is inside the initiator's signed transcript, so it
+    cannot be swapped for one the attacker generated itself.
     """
     payload = bytearray()
     payload += bytes(init.identity_key)
@@ -324,6 +392,12 @@ def encode_handshake_init(init: HandshakeInit) -> bytes:
     else:
         payload.append(0x01)
         payload += encode_varint(init.one_time_prekey_id)
+    if init.pq_ciphertext is None:
+        payload.append(0x00)
+    else:
+        payload.append(0x01)
+        payload += init.pq_ciphertext
+        payload += encode_varint(init.pq_prekey_id)
     return _encode_frame(KIND_HANDSHAKE_INIT, bytes(payload))
 
 
@@ -333,11 +407,13 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
 
     Raises:
         WireError: on any malformation.
+        InvalidField: the post-quantum ciphertext is present but the wrong
+            length for ML-KEM-768.
     """
     _decode_header(data, (KIND_HANDSHAKE_INIT,))
     payload = _extract_payload(data, 0)
 
-    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1
+    expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
             f'handshake payload of {len(payload)} bytes, minimum {expected_min}'
@@ -357,6 +433,22 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
     if has_opk:
         one_time_prekey_id, offset = decode_varint(payload, offset)
 
+    has_pq = payload[offset]
+    offset += 1
+    if has_pq not in (0x00, 0x01):
+        raise InvalidField(f'pq_ciphertext flag must be 0 or 1, got {has_pq}')
+
+    pq_ciphertext = None
+    pq_prekey_id = None
+    if has_pq:
+        raw, offset = _read_exact(
+            payload, offset, PQ_CIPHERTEXT_LEN, 'pq_ciphertext'
+        )
+        pq_ciphertext = raw
+        pq_prekey_id, offset = decode_varint(payload, offset)
+        if pq_prekey_id > _UINT64_MAX:
+            raise InvalidVarint('pq_prekey_id out of range')
+
     if offset != len(payload):
         raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
 
@@ -370,14 +462,21 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
         # InvalidField.
         raise InvalidField('identity_key is not a usable Ed25519 point') from exc
 
-    return HandshakeInit(
-        identity_key=verify_key,
-        # Derived, never transmitted: a tampered copy cannot be substituted.
-        identity_key_x25519=derived,
-        ephemeral_key=PublicKey(ephemeral_key),
-        signature=signature,
-        one_time_prekey_id=one_time_prekey_id,
-    )
+    try:
+        return HandshakeInit(
+            identity_key=verify_key,
+            # Derived, never transmitted: a tampered copy cannot be substituted.
+            identity_key_x25519=derived,
+            ephemeral_key=PublicKey(ephemeral_key),
+            signature=signature,
+            one_time_prekey_id=one_time_prekey_id,
+            pq_ciphertext=pq_ciphertext,
+            pq_prekey_id=pq_prekey_id,
+        )
+    except PQError as exc:
+        # Length disagreement between the encoder's constant and the dataclass's
+        # check, or a hostile id. Either way the frame is unusable.
+        raise InvalidField(f'malformed handshake: {exc}') from exc
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +493,9 @@ class WireMessage:
     are bound to the ciphertext as AEAD associated data by
     :class:`~src.crypto.double_ratchet.DoubleRatchet`, so they cannot be
     modified without the message failing to decrypt.
+
+    ``ciphertext`` is the authenticated part only. Whatever padding follows it
+    in the frame is framing, not content: see :func:`encode_ratchet_message`.
     """
 
     dh: bytes
@@ -406,14 +508,74 @@ class WireMessage:
         return {'dh': self.dh.hex(), 'pn': self.pn, 'n': self.n}
 
 
-def encode_ratchet_message(ciphertext: bytes, header: dict) -> bytes:
+def _quantised_payload_length(target: int, minimum: int) -> int:
+    """
+    The payload length that makes a frame exactly ``target`` bytes long.
+
+    A frame is ``version | kind | varint(payload_len) | payload``, and the
+    varint's own width depends on the payload length it announces, so the sum
+    has to be solved rather than computed. Enumerating the possible varint
+    widths is exact and cheap: there are at most nine of them.
+
+    Not used by the encoder, which pads the payload to a ladder instead and lets
+    the frame length follow from it. It stays because it is the only way to ask
+    the question "what payload length makes this frame exactly N bytes", and the
+    answer is not the same as ``N - 2``.
+
+    Raises:
+        FrameTooLarge: no payload length reaches the target, which happens only
+            if the target is smaller than a frame's fixed parts.
+    """
+    for width in range(1, 10):
+        payload_length = target - 2 - width
+        if payload_length < 0:
+            break
+        if len(encode_varint(payload_length)) == width:
+            if payload_length < minimum:
+                raise FrameTooLarge(
+                    f'frame target of {target} bytes leaves {payload_length} for '
+                    f'the payload, below the {minimum} this message needs'
+                )
+            return payload_length
+    raise FrameTooLarge(f'no frame of exactly {target} bytes can be built')
+
+
+def encode_ratchet_message(ciphertext: bytes, header: dict,
+                           profile: Optional[PaddingProfile] = None) -> bytes:
     """
     Encode ``nonce || ciphertext`` together with its header.
+
+    The payload is::
+
+        dh | varint(pn) | varint(n) | varint(ciphertext_len) | ciphertext | fill
+
+    The ciphertext length prefix is what lets the receiver find the end of the
+    ciphertext while the frame is quantised. The trailing fill is what makes the
+    *frame* land on a bucket, so that two messages of different sizes are the
+    same size on the path.
+
+    The fill is not authenticated, and deliberately so. It carries no
+    information the receiver needs, and putting it under the AEAD would mean
+    re-encrypting it on every counter change for no gain. Changing it is
+    harmless: the receiver checks the declared length against the frame, takes
+    exactly that many bytes, and the AEAD then fails on the tag because a
+    modified length means the tag is no longer the last 16 bytes of what it
+    decrypts. That is a detectable failure, not a substitution.
+
+    Args:
+        profile: the size ladder. ``None`` uses
+            :data:`~src.protocol.padding.DEFAULT_PROFILE`; a profile with a
+            floor of zero produces unpadded frames, which is only useful for
+            measuring what padding costs.
 
     Raises:
         WireError: the header is malformed, so encoding it would produce a
             frame the peer must reject.
+        PaddingError: the message does not fit in a frame once padded.
     """
+    if profile is None:
+        profile = DEFAULT_PROFILE
+
     dh_hex = header.get('dh')
     if not isinstance(dh_hex, str) or len(dh_hex) != KEY_LEN * 2:
         raise InvalidField('header dh must be 32-byte hex')
@@ -429,18 +591,41 @@ def encode_ratchet_message(ciphertext: bytes, header: dict) -> bytes:
         if not 0 <= value < _UINT32_MAX:
             raise InvalidField(f'header {name} out of range')
 
-    payload = bytes((
+    if not isinstance(ciphertext, (bytes, bytearray, memoryview)):
+        raise InvalidField('ciphertext must be bytes')
+    ciphertext = bytes(ciphertext)
+
+    prefix = (
         dh
         + encode_varint(header['pn'])
         + encode_varint(header['n'])
-        + ciphertext
-    ))
-    return _encode_frame(KIND_RATCHET_MESSAGE, payload)
+        + encode_varint(len(ciphertext))
+    )
+    content = len(prefix) + len(ciphertext)
+    if not profile.enabled:
+        return _encode_frame(KIND_RATCHET_MESSAGE, prefix + ciphertext)
+
+    # The payload is padded up to the profile's frame ladder, which sits
+    # FRAME_OVERHEAD_MAX above the plaintext ladder so that a short message
+    # costs one bucket rather than two.
+    target_payload = profile.frame_payload_length(content)
+    if target_payload < content:  # pragma: no cover - the ladder guarantees it
+        raise FrameTooLarge(
+            f'padded payload of {target_payload} is smaller than the {content} '
+            f'bytes of message'
+        )
+    fill = os.urandom(target_payload - content)
+    return _encode_frame(KIND_RATCHET_MESSAGE, prefix + ciphertext + fill)
 
 
 def decode_ratchet_message(data: bytes) -> WireMessage:
     """
     Decode a ratchet message.
+
+    Trailing bytes after the declared ciphertext are framing padding and are
+    discarded. They are not required to be a whole number of buckets: a peer
+    with a different padding profile is not an error, and enforcing one here
+    would make a padding change into a hard protocol break.
 
     Raises:
         WireError: on any malformation.
@@ -448,8 +633,10 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
     _decode_header(data, (KIND_RATCHET_MESSAGE,))
     payload = _extract_payload(data, 0)
 
-    # A message is dh + at least two one-byte varints + nonce + tag.
-    minimum = KEY_LEN + 2 + 24 + 16
+    # A message is dh, three varints and a ciphertext that at least holds a
+    # nonce and a tag. The ciphertext length itself is checked below, against
+    # the value the frame declares.
+    minimum = KEY_LEN + 3 + _MIN_CIPHERTEXT
     if len(payload) < minimum:
         raise TruncatedFrame(
             f'ratchet payload of {len(payload)} bytes, minimum {minimum}'
@@ -459,12 +646,32 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
     dh, offset = _read_exact(payload, offset, KEY_LEN, 'header dh')
     pn, offset = decode_varint(payload, offset)
     n, offset = decode_varint(payload, offset)
-    ciphertext = payload[offset:]
-
+    ciphertext_length, offset = decode_varint(payload, offset)
     if pn > _UINT32_MAX or n > _UINT32_MAX:
         raise InvalidField('header counter exceeds 32 bits')
+    if ciphertext_length > _UINT32_MAX:
+        raise InvalidField('ciphertext length exceeds 32 bits')
+    if ciphertext_length < _MIN_CIPHERTEXT:
+        # Checked against the declared ciphertext, not the payload. A padded
+        # frame is large whatever it carries, so a length check on the frame
+        # would pass a ciphertext too short to hold a nonce and a tag, and the
+        # failure would surface later as a confusing AEAD error instead of
+        # here.
+        raise InvalidField(
+            f'ciphertext of {ciphertext_length} bytes cannot hold a '
+            f'{_NONCE_LEN}-byte nonce and a {_TAG_LEN}-byte tag'
+        )
 
-    return WireMessage(dh=dh, pn=pn, n=n, ciphertext=bytes(ciphertext))
+    ciphertext, end = _read_exact(
+        payload, offset, ciphertext_length, 'ciphertext'
+    )
+    # Anything left is the length padding the sender added to quantise the
+    # frame. Not an error if present, and not required to be.
+    if end > len(payload):  # pragma: no cover - _read_exact already checks
+        raise TruncatedFrame('ciphertext runs past the end of the frame')
+    return WireMessage(
+        dh=dh, pn=pn, n=n, ciphertext=bytes(ciphertext)
+    )
 
 
 def protocol_version() -> int:

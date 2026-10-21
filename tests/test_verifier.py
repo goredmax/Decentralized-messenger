@@ -24,6 +24,7 @@ from src.protocol.verifier import (
     verify,
 )
 
+from src.crypto.pq import stocked_pq_store
 ALPHABET = '0123456789abcdef'
 
 
@@ -295,6 +296,7 @@ class TestSessionBinding:
             identity_private=bob_private,
             signed_prekey_private=spk_private,
             prekey_store=store,
+            pq_prekey_store=stocked_pq_store(),
         )
         bundle = responder.publish_bundle()
 

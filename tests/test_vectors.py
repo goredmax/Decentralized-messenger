@@ -468,16 +468,32 @@ class TestEd25519ToX25519Conversion:
 class TestComposedProtocolsBoundToThePrimitives:
     def test_x3dh_root_key_is_the_documented_hkdf_construction(self):
         """
-        SK = KDF(F || DH1 || ... || DH4), F = 0xFF * 32, salt = 32 zero bytes.
+        SK = KDF(F || labelled(DH1) || ... || labelled(DHn)), F = 0xFF * 32,
+        salt = 32 zero bytes.
 
         X3DH section 2.2 and 3.3. Asserted against ``hkdf`` from this
         repository rather than against ``cryptography``, so the X3DH composition
         is pinned to the implementation of HKDF that RFC 5869's own vectors
         validate above.
-        """
-        from src.crypto.x3dh import X3DH, X25519_F
 
-        dh_parts = [
+        The label prefix is part of the construction since PQXDH was added, and
+        it is a deviation from the specification's bare ``F || DH1 || ...``.
+        Written out here rather than shared with the implementation, because a
+        test that calls the function it is checking proves nothing.
+        """
+        from src.crypto.x3dh import (
+            LABEL_EK_IK,
+            LABEL_EK_OPK,
+            LABEL_EK_SPK,
+            LABEL_IK_SPK,
+            X3DH,
+            X25519_F,
+            DhPart,
+            parts_value,
+        )
+
+        labels = [LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK]
+        values = [
             RFC7748_X25519_1_EXPECTED,
             RFC7748_X25519_2_EXPECTED,
             RFC8032_TEST_3['public'],
@@ -486,18 +502,41 @@ class TestComposedProtocolsBoundToThePrimitives:
         # The DH outputs are 32 bytes each and are only checkable as a set of
         # correctly sized values here; the actual DH is covered by the X25519
         # vectors above and by test_x3dh.py.
-        for part in dh_parts:
-            assert len(part) == 32
+        for value in values:
+            assert len(value) == 32
 
+        dh_parts = [DhPart(label, value) for label, value in zip(labels, values)]
         context = b'DecentralizedMessenger-X3DH-v1'
         ours = X3DH.derive_master_key(dh_parts, context=context)
         expected = hkdf(
             salt=b'\x00' * 32,
-            ikm=X25519_F + b''.join(dh_parts),
+            ikm=X25519_F + parts_value(dh_parts),
             info=context,
             length=32,
         )
         assert ours == expected
+
+    def test_the_x3dh_kdf_input_is_the_documented_one(self):
+        """
+        The label prefix, spelled out independently.
+
+        ``F`` first, then each contribution as ``u32(len(label)) || label ||
+        value``. A change to either the order or the framing changes every
+        session's root key, and both sides would change together -- so the only
+        thing pinning it is a test that states it rather than recomputes it.
+        """
+        from src.crypto.x3dh import LABEL_KEM, DhPart, parts_value
+
+        parts = [
+            DhPart(b'A', b'\x01' * 32),
+            DhPart(b'LONGER', b'\x02' * 32),
+        ]
+        expected = (
+            len(b'A').to_bytes(4, 'big') + b'A' + b'\x01' * 32
+            + len(b'LONGER').to_bytes(4, 'big') + b'LONGER' + b'\x02' * 32
+        )
+        assert parts_value(parts) == expected
+        assert LABEL_KEM not in expected
 
     def test_ratchet_root_key_step_is_hkdf_over_the_dh_output(self):
         """
@@ -575,8 +614,80 @@ class TestProtocolConstantsArePinned:
         assert HKDF_INFO == b'WhisperRatchet-v2'
 
     def test_ratchet_protocol_version(self):
+        """
+        Pinned, because a version bump that does not reach the wire is exactly
+        the failure the version check was added to prevent.
+
+        Version 3 is PQXDH: the root key now comes from five labelled
+        contributions rather than four bare ones, so a state written under
+        version 2 would come back as a ratchet whose root key means something
+        else. Such a state has to be refused, not interpreted.
+        """
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        assert PROTOCOL_VERSION == 2
+        assert PROTOCOL_VERSION == 3
+
+    def test_the_wire_version_is_pinned_separately(self):
+        """
+        The wire version is not the session version, and moving one without the
+        other is a different kind of mistake.
+
+        ``PROTOCOL_VERSION`` governs key derivation and ``WIRE_VERSION`` governs
+        byte layout. A session survives a wire change; a session cannot survive a
+        key-schedule change. Version 2 added padding, version 3 added the
+        post-quantum fields, and both are cases where a v1 frame handed to a v3
+        decoder would read a length prefix that is not there.
+        """
+        from src.protocol.wire import WIRE_VERSION
+        from src.crypto.double_ratchet import PROTOCOL_VERSION
+        assert WIRE_VERSION == 3
+        # They are independent numbers, and the wire one moved twice while the
+        # session one moved once. Asserting the inequality would only mean to
+        # break the next time they happen to agree, so what is asserted is that
+        # both are pinned.
+        assert isinstance(PROTOCOL_VERSION, int) and PROTOCOL_VERSION == 3
+
+    def test_the_dh_part_labels_are_pinned(self):
+        """
+        The labels are mixed into the root key, so they are protocol constants
+        in exactly the sense ``HKDF_INFO`` is. Renaming one changes every session
+        and both sides change together.
+        """
+        from src.crypto.x3dh import (
+            LABEL_EK_IK,
+            LABEL_EK_OPK,
+            LABEL_EK_SPK,
+            LABEL_IK_SPK,
+            LABEL_KEM,
+        )
+        assert LABEL_IK_SPK == b'DH1'
+        assert LABEL_EK_IK == b'DH2'
+        assert LABEL_EK_SPK == b'DH3'
+        assert LABEL_EK_OPK == b'DH4'
+        assert LABEL_KEM == b'PQ'
+        # Distinct, or the separation they provide is not there.
+        labels = {LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK, LABEL_KEM}
+        assert len(labels) == 5
+
+    def test_the_post_quantum_sizes_are_pinned(self):
+        """
+        1184-byte encapsulation key, 1088-byte ciphertext, 32-byte shared secret,
+        64-byte serialised private key.
+
+        These are ML-KEM-768's parameters, not choices, and every one of them is
+        a wire or storage constant elsewhere in the code. A library change that
+        moved them would have to be caught here rather than discovered as a
+        decode failure against a real peer.
+        """
+        from src.crypto.pq import (
+            CIPHERTEXT_LEN,
+            PRIVATE_KEY_LEN,
+            PUBLIC_KEY_LEN,
+            SHARED_SECRET_LEN,
+        )
+        assert PUBLIC_KEY_LEN == 1184
+        assert CIPHERTEXT_LEN == 1088
+        assert SHARED_SECRET_LEN == 32
+        assert PRIVATE_KEY_LEN == 64
 
     def test_x3dh_context(self):
         """
@@ -614,9 +725,20 @@ class TestProtocolConstantsArePinned:
         derive the same root key, or two code paths silently produce different
         sessions.
         """
-        from src.crypto.x3dh import DEFAULT_CONTEXT, X3DH
+        from src.crypto.x3dh import (
+            DEFAULT_CONTEXT,
+            LABEL_EK_IK,
+            LABEL_EK_OPK,
+            LABEL_EK_SPK,
+            LABEL_IK_SPK,
+            X3DH,
+            DhPart,
+        )
 
-        parts = [RFC5869_CASE_1['prk']] * 4
+        parts = [
+            DhPart(label, RFC5869_CASE_1['prk'])
+            for label in (LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK)
+        ]
         assert (
             X3DH.derive_master_key(parts)
             == X3DH.derive_master_key(parts, context=DEFAULT_CONTEXT)
