@@ -37,8 +37,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements-dev.lock
 
-      - name: Install dependencies for the minimum version
-        if: matrix.python-version != '3.13'
+      - name: Install unlocked dependencies for 3.11 compatibility
+        if: matrix.python-version == '3.11'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.in -r requirements-dev.in
@@ -78,13 +78,16 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements-dev.lock
+
       # No "|| true": the previous workflow swallowed the exit code, so the job
       # stayed green while reporting findings. bandit exits non-zero on issues
       # and must fail the build.
       - name: Run bandit
-        run: |
-          pip install bandit
-          bandit -r src/ -f screen
+        run: bandit -r src/ -f screen
 
   security-pip-audit:
     runs-on: ubuntu-latest
@@ -95,11 +98,14 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install --require-hashes -r requirements-dev.lock
+
       # Also without "|| true", for the same reason.
       - name: Audit locked dependencies
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements.lock
+        run: pip-audit -r requirements.lock
 
 # Secret scanning used to run through gitleaks/gitleaks-action@v2, which needs a
 # GITLEAKS_LICENSE secret and pulls a third-party action into the build. Enable

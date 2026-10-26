@@ -24,6 +24,7 @@ cryptography>=42,<51
 
 # Static analysis
 bandit>=1.7
+pip-audit>=2.7
 
 # Formatting and linting
 black>=23.0
