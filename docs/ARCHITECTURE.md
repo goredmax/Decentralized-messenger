@@ -1,56 +1,169 @@
-# Архитектура децентрализованного мессенджера
+# Архитектура: текущее состояние и цель
 
-## Обзор
+**Статус на 2026-10-26.**
 
-Этот проект реализует приватный децентрализованный мессенджер с акцентом на:
-1. **E2EE (End-to-End Encryption)** - сквозное шифрование
-2. **Децентрализацию** - P2P сеть без центральных серверов
-3. **Tor интеграцию** - анонимизация трафика
-4. **Минимизацию метаданных** - защита информации о коммуникации
+Документ отвечает на два разных вопроса, и раньше они были смешаны:
 
-## Криптографическое ядро
+1. что реально реализовано в репозитории и проверено тестами;
+2. что задумано, но кода ещё нет.
 
-### Используемые алгоритмы
+Границы гарантий и известные дыры перечислены в
+[docs/SECURITY_BOUNDARIES.md](SECURITY_BOUNDARIES.md), модель угроз — в
+[THREAT_MODEL.md](../THREAT_MODEL.md). Этот документ их не дублирует.
 
-| Компонент | Алгоритм | Библиотека | Назначение |
-|-----------|----------|------------|------------|
-| Key Exchange | X25519 (ECDH) | PyNaCl | Обмен ключами |
-| Encryption | AES-256-GCM | cryptography | Шифрование сообщений |
-| Signatures | Ed25519 | PyNaCl | Цифровые подписи |
-| Key Derivation | HMAC-SHA256 | hashlib | KDF для цепочек ключей |
-| Ratchet Protocol | Double Ratchet | собственная | Forward secrecy |
+---
 
-### Double Ratchet Protocol
+## 1. Текущее состояние
 
-Реализован в `src/crypto/double_ratchet.py`:
+### 1.1. Как собирается сессия
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Double Ratchet                         │
-├─────────────────────────────────────────────────────────┤
-│  DH Ratchet (асимметричный)                            │
-│  • Генерация новых ephemeral ключей для каждого сообщения│
-│  • X25519 DH exchange при смене направления             │
-│  • Обновляет root chain                                 │
-├─────────────────────────────────────────────────────────┤
-│  Symmetric Ratchet (симметричный)                      │
-│  • HMAC-based KDF для эволюции цепочки ключей          │
-│  • Быстрое обновление для каждого сообщения            │
-│  • Message keys удаляются после использования          │
-└─────────────────────────────────────────────────────────┘
+```text
+PreKeyBundle, подписанный Ed25519
+        │
+        ▼
+X3DH / PQXDH: X25519 + ML-KEM-768
+        │
+        ▼
+root key ── HKDF-SHA256 ──► Double Ratchet
+        │
+        ▼
+key confirmation (MAC) ──► сообщения под XChaCha20-Poly1305
 ```
 
-### Свойства безопасности
+Что здесь важно:
 
-1. **Forward Secrecy**: Ключи сообщений удаляются после использования
-2. **Post-Compromise Security**: DH ratchet "лечит" компрометацию ключей
-3. **Out-of-Order Delivery**: Временное хранение skipped keys
+- подпись prekey-bundle проверяется до того, как будет потрачен одноразовый
+  prekey;
+- handshake инициатора подписан Ed25519 и покрывает transcript, включая
+  ML-KEM-768 ciphertext;
+- root key на стороне инициатора заперт до проверки key confirmation MAC;
+- Double Ratchet привязан к сессии через associated data, выведенные из обоих
+  identity key и версии протокола.
 
-## P2P Сеть
+### 1.2. Криптография
 
-### Libp2p Stack
+| Компонент | Реализация | Библиотека |
+| --- | --- | --- |
+| Обмен ключами | X25519 ECDH + ML-KEM-768 (PQXDH) | PyNaCl, `cryptography` |
+| Подписи и identity | Ed25519 | PyNaCl |
+| Шифрование сообщений | XChaCha20-Poly1305 | PyNaCl (libsodium) |
+| Корневой KDF | HKDF-SHA256 (RFC 5869) | собственная реализация в `src/crypto/kdf.py`, сверяется с `cryptography` и векторами RFC |
+| Цепочки Double Ratchet | HMAC-SHA256 | `hmac`/`hashlib` |
+| Хранилище | scrypt → HKDF-SHA256 → XChaCha20-Poly1305 | `hashlib`, PyNaCl |
 
+`cryptography` нужна для ML-KEM-768 и для кросс-валидации примитивов в тестах;
+шифрование сообщений и хранилища идёт через PyNaCl.
+
+Отступление от Signal, зафиксированное явно: identity key — это Ed25519, и он
+же конвертируется в X25519 для Diffie-Hellman. В Signal для подписи и для DH
+используются разные ключи. Компрометация одного identity key здесь ломает и
+аутентификацию, и key agreement.
+
+### 1.3. Протокол и wire-формат
+
+- `src/crypto/x3dh.py` — X3DH, PQXDH, проверка подписи bundle и handshake,
+  key confirmation, резерв/расход одноразовых prekey.
+- `src/crypto/double_ratchet.py` — DH-ratchet и симметричный ratchet,
+  skipped message keys, сериализация состояния, associated data.
+- `src/protocol/session.py` — связывает X3DH с Double Ratchet; инициатор не
+  может отправить сообщение до подтверждения ключа.
+- `src/protocol/wire.py` — канонический формат кадра версии 3:
+
+  ```text
+  +---------+---------+------------------+-------------------+
+  | version | kind    | payload_len      | payload           |
+  | 1 byte  | 1 byte  | varint (1..9 B)  | payload_len bytes |
+  +---------+---------+------------------+-------------------+
+  ```
+
+  Для ratchet-сообщения payload состоит из `dh(32)`, varint `pn`, varint `n`,
+  varint длины ciphertext, самого ciphertext (nonce 24 байта + tag 16 байт) и
+  необязательного заполнения до границы bucket.
+
+- `src/protocol/padding.py` — два слоя сокрытия длины: паддинг plaintext под
+  AEAD и квантование длины кадра. Профиль по умолчанию: floor 8192 байта,
+  шаг 8192. Наблюдателю всё равно видна граница bucket, число сообщений и
+  тайминги; это записано в модуле и в границах безопасности.
+- `src/protocol/sender_key.py` — Sender Keys для групп: chain key, производные
+  message keys, distribution message, ротация после удаления участника.
+  Распространение distribution-сообщений между процессами не реализовано:
+  транспорта для этого нет.
+- `src/protocol/transparency.py` — подписанный hash-linked лог цепочек Sender
+  Keys. Ловит повтор, форк, откат и дыру; **не** является key transparency,
+  потому что независимых свидетелей и gossip нет.
+- `src/protocol/verifier.py` — safety numbers для внеполосной проверки
+  identity key.
+
+Декодеры `wire.py` тотальные: на любом входе они обязаны вернуть ошибку
+`WireError`, а не `KeyError`/`struct.error`, и проверяют объявленную длину до
+выделения буфера.
+
+### 1.4. Хранилище
+
+`src/storage/container.py` — зашифрованный контейнер:
+
+```text
+header  = magic(8) | version(1) | kdf_id(1) | N_log2(1) | r(1) | p(1) | salt(16)
+body    = nonce(24) | ciphertext
+payload = epoch(8) | plaintext
 ```
+
+Ключ выводится из пароля через scrypt, затем через HKDF-SHA256. Заголовок
+передаётся в AEAD как associated data, поэтому параметры KDF тоже
+аутентифицированы. Epoch лежит внутри зашифрованного payload и позволяет
+отказаться от более старой версии файла, если у вызывающего есть внешний
+anchor. Замена файла целиком на более старый, но внутренне валидный **не
+обнаруживается**.
+
+Поверх контейнера работают `PersistentPreKeyStore`,
+`PersistentPQPreKeyStore`, `IdentityStore`, `SessionStore` и `PeerDirectory`.
+Это не SQLite и не SQLCipher: отдельной базы данных в проекте нет.
+
+### 1.5. Транспорт
+
+`src/p2p/relay.py` определяет интерфейс `Transport` и реализует relay в одном
+процессе: две стороны обмениваются кадрами через очередь, relay записывает
+длины кадров. Очередь ограничена, чтобы медленный получатель не приводил к
+неограниченному росту памяти.
+
+Это не сеть: нет сокетов, портов, discovery и соединений между машинами.
+`src/tor/` — пустая заглушка. `src/network/` не существует.
+
+### 1.6. Что лежит в репозитории
+
+```text
+src/
+├── crypto/       x3dh.py, double_ratchet.py, kdf.py, key_management.py,
+│                 prekey_store.py, pq.py
+├── protocol/     session.py, wire.py, padding.py, sender_key.py,
+│                 transparency.py, verifier.py, limits.py
+├── p2p/          relay.py
+├── storage/      container.py, store.py
+└── tor/          пустая заглушка
+examples/         cli.py — демонстрация полного цикла в одном процессе
+tests/            684 теста
+docs/             ARCHITECTURE.md, SECURITY_BOUNDARIES.md
+```
+
+В корне: `pyproject.toml`, `pytest.ini`, `requirements*.in`,
+`requirements*.lock`. Файлов `requirements.txt`, каталога `config/` и
+каталога `src/network/` нет.
+
+`examples/cli.py` — не мессенджер, а проверка того, что протокол сходится:
+bundle → X3DH/PQXDH → key confirmation → Double Ratchet → сообщения в обе
+стороны через relay. Он показывает safety numbers и длины кадров, то есть
+ровно то, что видит пассивный наблюдатель.
+
+---
+
+## 2. Целевая архитектура (не реализовано)
+
+Всё в этом разделе — план, а не описание текущего кода. Ни один из компонентов
+ниже не входит в зависимости и не проверяется тестами.
+
+### 2.1. Сеть
+
+```text
 ┌─────────────────────────────────────────┐
 │           Application Layer             │
 │         (Messaging Protocol)            │
@@ -69,110 +182,77 @@
 └─────────────────────────────────────────┘
 ```
 
-## Tor Интеграция
+libp2p, DHT, QUIC, Noise и NAT traversal не реализованы. libp2p нет в
+зависимостях, и утверждения о его аудите к этому проекту не относятся.
 
-### Hidden Services v3
+### 2.2. Tor
 
-Каждый узел может работать как Tor hidden service:
-- `.onion` адрес генерируется из публичного ключа
-- Трафик анонимизирован через 3+ relay узлов
-- Нет возможности определить IP собеседника
+Onion services v3, управление цепочками и ротация circuit'ов не реализованы.
+Каталог `src/tor/` существует только как место для будущего кода.
 
-### Circuit Management
+### 2.3. Метаданные
 
-```python
-# Каждый новый контакт = новый Tor circuit
-# Rotating circuits для минимизации correlation attacks
-```
+Реализовано только сокрытие длины сообщения ступенчатым паддингом. Не
+реализованы:
 
-## Минимизация метаданных
+- cover traffic;
+- обфускация таймингов и случайные задержки;
+- межкадровый padding как отдельный слой;
+- contact discovery через DHT без раскрытия социального графа.
 
-### Техники
+В коде нет логирования сообщений и соединений, но это свойство текущего кода,
+а не гарантия для окружения, в котором он запущен.
 
-1. **Padding**: Все сообщения дополняются до фиксированного размера
-2. **Timing Obfuscation**: Случайные задержки перед отправкой
-3. **Contact Discovery**: Через DHT без раскрытия социальных графов
-4. **No Logs**: Никаких логов соединений или сообщений
+### 2.4. Клиент
 
-### Формат сообщения
+`examples/cli.py` — демонстрационный CLI. Полноценного клиента, GUI и мобильных
+приложений нет.
 
-```
-┌──────────────┬─────────────┬──────────────┬────────────┐
-│   Header     │    Nonce    │  Ciphertext  │   Padding  │
-│  (variable)  │  (12 bytes) │  (variable)  │ (to 1KB+)  │
-└──────────────┴─────────────┴──────────────┴────────────┘
-```
+### 2.5. Этапы
 
-## Структура проекта
+- **Phase 1: криптографическое ядро**
+  - [x] key management и конвертация Ed25519 → X25519
+  - [x] Double Ratchet
+  - [x] X3DH
+  - [x] PQXDH с ML-KEM-768
+  - [x] key confirmation
+  - [x] Sender Keys (шифрование и distribution message; доставки нет)
+- **Phase 2: P2P-сеть**
+  - [ ] libp2p
+  - [ ] DHT для discovery
+  - [ ] маршрутизация сообщений
+  - [x] интерфейс `Transport` и relay в одном процессе (как заготовка)
+- **Phase 3: Tor**
+  - [ ] hidden service
+  - [ ] управление цепочками
+  - [ ] разрешение `.onion`
+- **Phase 4: хранилище**
+  - [x] шифрованный контейнер (scrypt + XChaCha20-Poly1305)
+  - [x] хранение ключей и состояния сессий
+  - [ ] очередь сообщений
+  - [ ] SQLCipher или другая SQL-база (не используется)
+- **Phase 5: клиент**
+  - [x] демонстрационный CLI
+  - [ ] полноценный CLI-клиент
+  - [ ] GUI
+  - [ ] мобильные приложения
 
-```
-/workspace
-├── src/
-│   ├── crypto/           # Криптография
-│   │   ├── __init__.py
-│   │   ├── key_management.py   # X25519, Ed25519, Box
-│   │   └── double_ratchet.py   # Signal Protocol
-│   ├── p2p/              # P2P сеть
-│   ├── network/          # Транспорт
-│   ├── tor/              # Tor интеграция
-│   └── storage/          # Локальное хранилище
-├── tests/                # Тесты
-├── docs/                 # Документация
-├── config/               # Конфигурация
-├── README.md
-└── requirements.txt
-```
+---
 
-## Этапы разработки
+## 3. Безопасность
 
-### ✅ Phase 1: Cryptography Core
-- [x] Key management с PyNaCl
-- [x] Double Ratchet Protocol
-- [ ] X3DH initial handshake
-- [ ] Group chat protocol (Sender Keys)
+Проект **не проходил независимый аудит**. Это прототип криптографического
+ядра, а не готовый мессенджер.
 
-### Phase 2: P2P Network
-- [ ] Libp2p integration
-- [ ] DHT for peer discovery
-- [ ] Message routing
+PyNaCl/libsodium и `cryptography` имеют собственные аудиты и репутацию, но это
+аудиты библиотек, а не этого кода и не его композиции. Упоминание аудита
+libp2p из предыдущей версии документа удалено: libp2p здесь не используется.
 
-### Phase 3: Tor Integration  
-- [ ] Hidden service setup
-- [ ] Circuit management
-- [ ] .onion address resolution
+Подробная модель угроз — в [THREAT_MODEL.md](../THREAT_MODEL.md). Точные границы
+того, что защищено, что не защищено и какие ограничения невозможно закрыть
+кодом в этом репозитории, — в
+[docs/SECURITY_BOUNDARIES.md](SECURITY_BOUNDARIES.md).
 
-### Phase 4: Storage
-- [ ] SQLCipher encrypted database
-- [ ] Message queue
-- [ ] Key storage (encrypted at rest)
+## 4. Лицензия
 
-### Phase 5: Client
-- [ ] CLI interface
-- [ ] GUI (optional)
-- [ ] Mobile apps (future)
-
-## Безопасность
-
-### Аудит криптомодулей
-
-Все используемые библиотеки прошли независимый аудит:
-- **PyNaCl** (libsodium): multiple audits
-- **cryptography.io**: regular audits
-- **Libp2p**: ongoing security review
-
-### Threat Model
-
-Защищаемся от:
-- ✓ Пассивного наблюдения трафика
-- ✓ Компрометации серверов (их нет)
-- ✓ Частичной компрометации ключей
-- ✓ Traffic analysis (частично)
-
-Не защищаемся от:
-- ✗ Компрометации endpoint устройств
-- ✗ Global passive adversary (полная корреляция)
-- ✗ Социальную инженерию
-
-## Лицензия
-
-MIT License - способствуем распространению приватных технологий
+MIT License.

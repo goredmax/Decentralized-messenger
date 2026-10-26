@@ -41,8 +41,8 @@
 | `src/tor/` | **Пустая заглушка.** |
 | `src/network/` | Не существует. |
 
-Документация в `docs/` и `THREAT_MODEL.md` описывает целевую архитектуру, а не
-текущее состояние кода.
+`docs/ARCHITECTURE.md` описывает текущее состояние и цель, `THREAT_MODEL.md` —
+модель угроз, `docs/SECURITY_BOUNDARIES.md` — точные границы гарантий.
 
 ## Как запустить
 
@@ -62,14 +62,18 @@ confirmation → Double Ratchet → сообщения в обе стороны 
 Tor; длина кадра видна всем, кто смотрит на relay. Демо показывает, что протокол
 сходится, и показывает же, чего в нём нет.
 
-## Архитектура (целевая)
+## Архитектура: что есть и что задумано
 
-1. **Криптография (`src/crypto/`)** — X25519 (ECDH), Ed25519 (подписи),
-   XChaCha20-Poly1305 (AEAD в ратчете)
-2. **P2P сеть (`src/p2p/`)** — libp2p, DHT, Kademlia
-3. **Tor (`src/tor/`)** — onion services v3, управление цепочками
-4. **Сеть (`src/network/`)** — QUIC, мультиплексирование, NAT traversal
-5. **Хранилище (`src/storage/`)** — SQLite + SQLCipher, ephemeral messages
+1. **Криптография (`src/crypto/`)** — реализовано: X25519 + ML-KEM-768
+   (X3DH/PQXDH), Ed25519 (подписи), XChaCha20-Poly1305 (AEAD в ратчете).
+2. **P2P сеть (`src/p2p/`)** — сейчас только интерфейс `Transport` и relay в
+   одном процессе; libp2p, DHT и Kademlia — цель.
+3. **Tor (`src/tor/`)** — цель: onion services v3 и управление цепочками;
+   сейчас пустая заглушка.
+4. **Сеть (`src/network/`)** — цель: QUIC, мультиплексирование, NAT traversal;
+   каталога пока нет.
+5. **Хранилище (`src/storage/`)** — реализовано: scrypt + HKDF +
+   XChaCha20-Poly1305, шифрованные контейнеры. SQLite/SQLCipher не используется.
 
 ## Используемые технологии
 
