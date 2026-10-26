@@ -43,38 +43,38 @@ from src.storage.store import (
 
 # Weaker parameters keep the suite fast. Production defaults are in DEFAULT_KDF.
 FAST = KdfParams(n_log2=12, r=8, p=1)
-PASSWORD = 'correct horse battery staple'
+PASSWORD = "correct horse battery staple"
 
 
 @pytest.fixture
 def container_path(tmp_path):
-    return str(tmp_path / 'state.bin')
+    return str(tmp_path / "state.bin")
 
 
 class TestContainerBasics:
     def test_round_trip(self, container_path):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
-        container.store(b'payload bytes', epoch=1)
+        container.store(b"payload bytes", epoch=1)
         epoch, payload = container.open(container_path, PASSWORD).load()
         assert epoch == 1
-        assert payload == b'payload bytes'
+        assert payload == b"payload bytes"
 
     def test_reopen_after_process_boundary(self, container_path):
-        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b'x', 3)
+        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b"x", 3)
         # A fresh open is what a restart looks like.
-        assert Container.open(container_path, PASSWORD).load() == (3, b'x')
+        assert Container.open(container_path, PASSWORD).load() == (3, b"x")
 
     def test_file_is_not_really_a_container(self, container_path):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
-        container.store(b'secret material', epoch=1)
-        raw = open(container_path, 'rb').read()
-        assert b'secret material' not in raw
+        container.store(b"secret material", epoch=1)
+        raw = open(container_path, "rb").read()
+        assert b"secret material" not in raw
         assert PASSWORD.encode() not in raw
 
     def test_wrong_password_rejected(self, container_path):
-        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b'x', 1)
+        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b"x", 1)
         with pytest.raises(WrongPassword):
-            Container.open(container_path, 'not the password').load()
+            Container.open(container_path, "not the password").load()
 
     def test_create_refuses_to_clobber(self, container_path):
         Container.create(container_path, PASSWORD, kdf_params=FAST)
@@ -88,9 +88,9 @@ class TestContainerBasics:
         A caller holding an external epoch anchor must re-anchor after this,
         which is why the reset is documented rather than silent.
         """
-        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b'old', 1)
+        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b"old", 1)
         Container.create(container_path, PASSWORD, kdf_params=FAST, overwrite=True)
-        assert Container.open(container_path, PASSWORD).load() == (0, b'')
+        assert Container.open(container_path, PASSWORD).load() == (0, b"")
 
     def test_missing_file(self, container_path):
         with pytest.raises(MalformedContainer):
@@ -102,7 +102,7 @@ class TestContainerBasics:
         container.delete()
         assert not os.path.exists(container_path)
 
-    @pytest.mark.parametrize('payload', [b'', b'\x00' * 4096, bytes(range(256))])
+    @pytest.mark.parametrize("payload", [b"", b"\x00" * 4096, bytes(range(256))])
     def test_arbitrary_payloads(self, container_path, payload):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
         container.store(payload, epoch=1)
@@ -110,28 +110,28 @@ class TestContainerBasics:
 
     def test_empty_password_rejected(self, container_path):
         with pytest.raises(ValueError):
-            Container.create(container_path, '', kdf_params=FAST)
+            Container.create(container_path, "", kdf_params=FAST)
 
 
 class TestTamperDetection:
-    def _seal(self, path, payload=b'x', epoch=1):
+    def _seal(self, path, payload=b"x", epoch=1):
         container = Container.create(path, PASSWORD, kdf_params=FAST)
         container.store(payload, epoch)
         return container
 
     def test_modified_ciphertext_detected(self, container_path):
         self._seal(container_path)
-        raw = bytearray(open(container_path, 'rb').read())
+        raw = bytearray(open(container_path, "rb").read())
         raw[-1] ^= 0xFF
-        open(container_path, 'wb').write(bytes(raw))
+        open(container_path, "wb").write(bytes(raw))
         with pytest.raises(WrongPassword):
             Container.open(container_path, PASSWORD).load()
 
     def test_modified_nonce_detected(self, container_path):
         self._seal(container_path)
-        raw = bytearray(open(container_path, 'rb').read())
+        raw = bytearray(open(container_path, "rb").read())
         raw[29] ^= 0xFF
-        open(container_path, 'wb').write(bytes(raw))
+        open(container_path, "wb").write(bytes(raw))
         with pytest.raises(WrongPassword):
             Container.open(container_path, PASSWORD).load()
 
@@ -143,10 +143,10 @@ class TestTamperDetection:
         error rather than a bare ValueError from a header read off disk.
         """
         self._seal(container_path)
-        raw = bytearray(open(container_path, 'rb').read())
+        raw = bytearray(open(container_path, "rb").read())
         # header = magic(8) | version(1) | kdf_id(1) | N_log2(1) | r(1) | p(1)
-        raw[len(b'ANARCHY\x01') + 2] = 8      # N_log2 -> 256, i.e. free to guess
-        open(container_path, 'wb').write(bytes(raw))
+        raw[len(b"ANARCHY\x01") + 2] = 8  # N_log2 -> 256, i.e. free to guess
+        open(container_path, "wb").write(bytes(raw))
         with pytest.raises(MalformedContainer):
             Container.open(container_path, PASSWORD)
 
@@ -162,20 +162,20 @@ class TestTamperDetection:
         """
         stronger = KdfParams(n_log2=14, r=8, p=1)
         container = Container.create(container_path, PASSWORD, kdf_params=stronger)
-        container.store(b'x', epoch=1)
+        container.store(b"x", epoch=1)
 
-        raw = bytearray(open(container_path, 'rb').read())
-        raw[len(b'ANARCHY\x01') + 2] = 12     # cheaper, but still allowed
-        open(container_path, 'wb').write(bytes(raw))
+        raw = bytearray(open(container_path, "rb").read())
+        raw[len(b"ANARCHY\x01") + 2] = 12  # cheaper, but still allowed
+        open(container_path, "wb").write(bytes(raw))
 
         with pytest.raises(WrongPassword):
             Container.open(container_path, PASSWORD).load()
 
     def test_unknown_kdf_id_rejected(self, container_path):
         self._seal(container_path)
-        raw = bytearray(open(container_path, 'rb').read())
-        raw[len(b'ANARCHY\x01') + 1] = 0x7F   # kdf_id
-        open(container_path, 'wb').write(bytes(raw))
+        raw = bytearray(open(container_path, "rb").read())
+        raw[len(b"ANARCHY\x01") + 1] = 0x7F  # kdf_id
+        open(container_path, "wb").write(bytes(raw))
         with pytest.raises(MalformedContainer):
             Container.open(container_path, PASSWORD)
 
@@ -189,40 +189,40 @@ class TestTamperDetection:
 
     def test_bad_magic_rejected(self, container_path):
         self._seal(container_path)
-        raw = bytearray(open(container_path, 'rb').read())
-        raw[0] = ord('X')
-        open(container_path, 'wb').write(bytes(raw))
+        raw = bytearray(open(container_path, "rb").read())
+        raw[0] = ord("X")
+        open(container_path, "wb").write(bytes(raw))
         with pytest.raises(MalformedContainer):
             Container.open(container_path, PASSWORD)
 
     def test_unknown_version_rejected(self, container_path):
         self._seal(container_path)
-        raw = bytearray(open(container_path, 'rb').read())
-        raw[len(b'ANARCHY\x01')] = CONTAINER_VERSION + 1
-        open(container_path, 'wb').write(bytes(raw))
+        raw = bytearray(open(container_path, "rb").read())
+        raw[len(b"ANARCHY\x01")] = CONTAINER_VERSION + 1
+        open(container_path, "wb").write(bytes(raw))
         with pytest.raises(MalformedContainer):
             Container.open(container_path, PASSWORD)
 
     def test_truncated_file_rejected(self, container_path):
         self._seal(container_path)
-        raw = open(container_path, 'rb').read()
-        open(container_path, 'wb').write(raw[:20])
+        raw = open(container_path, "rb").read()
+        open(container_path, "wb").write(raw[:20])
         with pytest.raises(MalformedContainer):
             Container.open(container_path, PASSWORD).load()
 
     def test_empty_file_rejected(self, container_path):
-        open(container_path, 'wb').close()
+        open(container_path, "wb").close()
         with pytest.raises(MalformedContainer):
             Container.open(container_path, PASSWORD)
 
 
 class TestEpoch:
     def test_epoch_survives_reload(self, container_path):
-        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b'x', 42)
+        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b"x", 42)
         assert Container.open(container_path, PASSWORD).load()[0] == 42
 
     def test_minimum_epoch_enforced(self, container_path):
-        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b'x', 5)
+        Container.create(container_path, PASSWORD, kdf_params=FAST).store(b"x", 5)
         assert Container.open(container_path, PASSWORD).load(minimum_epoch=5)
         with pytest.raises(EpochRollback):
             Container.open(container_path, PASSWORD).load(minimum_epoch=6)
@@ -235,27 +235,27 @@ class TestEpoch:
         simply bump it past the caller's anchor.
         """
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
-        container.store(b'x', 1)
-        raw = open(container_path, 'rb').read()
+        container.store(b"x", 1)
+        raw = open(container_path, "rb").read()
         # Prove the epoch is not in the header: it must appear only once, in
         # the sealed body, and the header is exactly 29 bytes.
         assert len(raw) > 29
-        assert b'\x00' * 8 not in raw[:29]
+        assert b"\x00" * 8 not in raw[:29]
 
     def test_negative_epoch_rejected(self, container_path):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
         with pytest.raises(ValueError):
-            container.store(b'x', -1)
+            container.store(b"x", -1)
 
     def test_epoch_too_large_rejected(self, container_path):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
         with pytest.raises(ValueError):
-            container.store(b'x', 2 ** 64)
+            container.store(b"x", 2**64)
 
     def test_store_requires_bytes(self, container_path):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
         with pytest.raises(TypeError):
-            container.store('text', 1)
+            container.store("text", 1)
 
 
 class TestPersistentPreKeyStore:
@@ -316,19 +316,19 @@ class TestPersistentPreKeyStore:
     def test_wrong_password_cannot_read_pool(self, container_path):
         self._store(container_path)
         with pytest.raises(WrongPassword):
-            PersistentPreKeyStore(Container.open(container_path, 'wrong'))
+            PersistentPreKeyStore(Container.open(container_path, "wrong"))
 
     def test_private_keys_not_plaintext_in_file(self, container_path):
         self._store(container_path, count=1)
         store = PersistentPreKeyStore(Container.open(container_path, PASSWORD))
-        raw = open(container_path, 'rb').read()
+        raw = open(container_path, "rb").read()
         secret = bytes(store.peek(1000).private_key)
         assert secret not in raw
         assert base64.b64encode(secret) not in raw
 
     def test_corrupt_payload_rejected(self, container_path):
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
-        container.store(b'not json at all', epoch=1)
+        container.store(b"not json at all", epoch=1)
         with pytest.raises(StorageError):
             PersistentPreKeyStore(container)
 
@@ -340,14 +340,18 @@ class TestPersistentPreKeyStore:
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
         private = PrivateKey.generate()
         document = {
-            'keys': [{
-                'id': 1,
-                'private': base64.b64encode(bytes(private)).decode(),
-                'public': base64.b64encode(bytes(PrivateKey.generate().public_key)).decode(),
-            }],
-            'used': [],
+            "keys": [
+                {
+                    "id": 1,
+                    "private": base64.b64encode(bytes(private)).decode(),
+                    "public": base64.b64encode(
+                        bytes(PrivateKey.generate().public_key)
+                    ).decode(),
+                }
+            ],
+            "used": [],
         }
-        container.store(json.dumps(document).encode('utf-8'), epoch=1)
+        container.store(json.dumps(document).encode("utf-8"), epoch=1)
         with pytest.raises(StorageError):
             PersistentPreKeyStore(container)
 
@@ -363,9 +367,9 @@ class TestPersistentPreKeyStore:
         store = PersistentPreKeyStore(container)
 
         def explode(payload, epoch):
-            raise OSError('disk full')
+            raise OSError("disk full")
 
-        monkeypatch.setattr(container, 'store', explode)
+        monkeypatch.setattr(container, "store", explode)
         with pytest.raises(OSError):
             store.consume(1000)
         monkeypatch.undo()
@@ -460,7 +464,9 @@ class TestIdentityStore:
             store.initialise()
 
     def test_uninitialised_store_refuses_access(self, container_path):
-        store = IdentityStore(Container.create(container_path, PASSWORD, kdf_params=FAST))
+        store = IdentityStore(
+            Container.create(container_path, PASSWORD, kdf_params=FAST)
+        )
         with pytest.raises(StorageError):
             store.identity_key
 
@@ -480,13 +486,15 @@ class TestIdentityStore:
         assert bytes(reopened.signed_prekey_private) == spk
 
     def test_rotate_requires_initialisation(self, container_path):
-        store = IdentityStore(Container.create(container_path, PASSWORD, kdf_params=FAST))
+        store = IdentityStore(
+            Container.create(container_path, PASSWORD, kdf_params=FAST)
+        )
         with pytest.raises(StorageError):
             store.rotate()
 
     def test_private_key_not_plaintext(self, container_path):
         store = self._identity(container_path)
-        raw = open(container_path, 'rb').read()
+        raw = open(container_path, "rb").read()
         assert bytes(store.identity_key) not in raw
 
 
@@ -494,6 +502,7 @@ class TestSessionStore:
     def _ratchet_state(self):
         import nacl.public as public
         from src.crypto.double_ratchet import DoubleRatchet
+
         alice = public.PrivateKey.generate()
         bob = public.PrivateKey.generate()
         shared = public.Box(alice, bob.public_key)._shared_key
@@ -503,41 +512,45 @@ class TestSessionStore:
             root_key=shared,
             is_initiator=True,
         )
-        ratchet.encrypt(b'hello')
+        ratchet.encrypt(b"hello")
         return ratchet.state
 
     def test_session_survives_reopen(self, tmp_path):
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        directory = str(tmp_path / 'sessions')
+
+        directory = str(tmp_path / "sessions")
         store = SessionStore(directory, PASSWORD)
         state = self._ratchet_state()
-        store.save('peer-1', state)
+        store.save("peer-1", state)
 
         reopened = SessionStore(directory, PASSWORD)
-        loaded = reopened.load('peer-1', PROTOCOL_VERSION)
+        loaded = reopened.load("peer-1", PROTOCOL_VERSION)
         assert loaded.root_key == state.root_key
         assert loaded.send_chain_key == state.send_chain_key
         assert loaded.send_msg_count == state.send_msg_count
 
     def test_missing_peer(self, tmp_path):
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        store = SessionStore(str(tmp_path / 's'), PASSWORD)
+
+        store = SessionStore(str(tmp_path / "s"), PASSWORD)
         with pytest.raises(KeyError):
-            store.load('nobody', PROTOCOL_VERSION)
+            store.load("nobody", PROTOCOL_VERSION)
 
     def test_wrong_password(self, tmp_path):
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        directory = str(tmp_path / 'sessions')
-        SessionStore(directory, PASSWORD).save('peer', self._ratchet_state())
+
+        directory = str(tmp_path / "sessions")
+        SessionStore(directory, PASSWORD).save("peer", self._ratchet_state())
         with pytest.raises(WrongPassword):
-            SessionStore(directory, 'wrong').load('peer', PROTOCOL_VERSION)
+            SessionStore(directory, "wrong").load("peer", PROTOCOL_VERSION)
 
     def test_version_mismatch_refused(self, tmp_path):
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        directory = str(tmp_path / 'sessions')
-        SessionStore(directory, PASSWORD).save('peer', self._ratchet_state())
+
+        directory = str(tmp_path / "sessions")
+        SessionStore(directory, PASSWORD).save("peer", self._ratchet_state())
         with pytest.raises(Exception):
-            SessionStore(directory, PASSWORD).load('peer', PROTOCOL_VERSION + 1)
+            SessionStore(directory, PASSWORD).load("peer", PROTOCOL_VERSION + 1)
 
     def test_peer_names_are_hashed(self, tmp_path):
         """
@@ -545,42 +558,45 @@ class TestSessionStore:
         the id is hashed rather than used as a filename.
         """
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        directory = str(tmp_path / 'sessions')
+
+        directory = str(tmp_path / "sessions")
         store = SessionStore(directory, PASSWORD)
-        hostile = '../../../etc/passwd'
+        hostile = "../../../etc/passwd"
         store.save(hostile, self._ratchet_state())
         assert store.load(hostile, PROTOCOL_VERSION) is not None
         names = os.listdir(directory)
-        assert all(not name.startswith('.') for name in names)
-        assert all(name.endswith('.session') for name in names)
+        assert all(not name.startswith(".") for name in names)
+        assert all(name.endswith(".session") for name in names)
 
     def test_peers_are_isolated(self, tmp_path):
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        store = SessionStore(str(tmp_path / 'sessions'), PASSWORD)
+
+        store = SessionStore(str(tmp_path / "sessions"), PASSWORD)
         first = self._ratchet_state()
         second = self._ratchet_state()
-        store.save('a', first)
-        store.save('b', second)
-        assert store.load('a', PROTOCOL_VERSION).root_key == first.root_key
-        assert store.load('b', PROTOCOL_VERSION).root_key == second.root_key
+        store.save("a", first)
+        store.save("b", second)
+        assert store.load("a", PROTOCOL_VERSION).root_key == first.root_key
+        assert store.load("b", PROTOCOL_VERSION).root_key == second.root_key
         assert len(store.peers()) == 2
 
     def test_delete_one_peer(self, tmp_path):
         from src.crypto.double_ratchet import PROTOCOL_VERSION
-        store = SessionStore(str(tmp_path / 'sessions'), PASSWORD)
-        store.save('a', self._ratchet_state())
-        store.save('b', self._ratchet_state())
-        store.delete('a')
+
+        store = SessionStore(str(tmp_path / "sessions"), PASSWORD)
+        store.save("a", self._ratchet_state())
+        store.save("b", self._ratchet_state())
+        store.delete("a")
         with pytest.raises(KeyError):
-            store.load('a', PROTOCOL_VERSION)
-        assert store.load('b', PROTOCOL_VERSION) is not None
+            store.load("a", PROTOCOL_VERSION)
+        assert store.load("b", PROTOCOL_VERSION) is not None
 
     def test_message_keys_not_written(self, tmp_path):
-        directory = str(tmp_path / 'sessions')
+        directory = str(tmp_path / "sessions")
         store = SessionStore(directory, PASSWORD)
         state = self._ratchet_state()
-        store.save('peer', state)
-        raw = open(os.path.join(directory, store._path('peer')), 'rb').read()
+        store.save("peer", state)
+        raw = open(os.path.join(directory, store._path("peer")), "rb").read()
         for key in (state.root_key, state.send_chain_key):
             assert key and key not in raw
 
@@ -594,7 +610,7 @@ class TestPeerDirectory:
 
     @pytest.fixture
     def directory_path(self, tmp_path):
-        return str(tmp_path / 'peers.bin')
+        return str(tmp_path / "peers.bin")
 
     def test_round_trip(self, directory_path):
         container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
@@ -609,9 +625,7 @@ class TestPeerDirectory:
         assert directory.role_of(bob) is False
 
         # "Restart".
-        reopened = PeerDirectory(
-            Container.open(directory_path, PASSWORD)
-        )
+        reopened = PeerDirectory(Container.open(directory_path, PASSWORD))
         assert reopened.role_of(alice) is True
         assert reopened.role_of(bob) is False
         # Stable order by id, so the two random keys are not in insertion order.
@@ -633,10 +647,10 @@ class TestPeerDirectory:
         alice = SigningKey.generate().verify_key
         directory.set(alice, is_initiator=True)
 
-        raw = open(directory_path, 'rb').read()
+        raw = open(directory_path, "rb").read()
         assert bytes(alice) not in raw
-        assert b'is_initiator' not in raw
-        assert b'peers' not in raw
+        assert b"is_initiator" not in raw
+        assert b"peers" not in raw
 
     def test_wrong_password(self, directory_path):
         container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
@@ -644,7 +658,7 @@ class TestPeerDirectory:
             SigningKey.generate().verify_key, is_initiator=True
         )
         with pytest.raises(WrongPassword):
-            PeerDirectory(Container.open(directory_path, 'wrong'))
+            PeerDirectory(Container.open(directory_path, "wrong"))
 
     def test_re_recording_the_same_role_does_not_rewrite(self, directory_path):
         """
@@ -669,9 +683,10 @@ class TestPeerDirectory:
         directory.set(identity, is_initiator=True)
         directory.set(identity, is_initiator=False)
         assert directory.role_of(identity) is False
-        assert PeerDirectory(
-            Container.open(directory_path, PASSWORD)
-        ).role_of(identity) is False
+        assert (
+            PeerDirectory(Container.open(directory_path, PASSWORD)).role_of(identity)
+            is False
+        )
 
     def test_remove(self, directory_path):
         directory = PeerDirectory(
@@ -692,13 +707,11 @@ class TestPeerDirectory:
         """
         container = Container.create(directory_path, PASSWORD, kdf_params=FAST)
         for payload in (
-            b'not json',
-            json.dumps({'peers': 'not an object'}).encode(),
-            json.dumps({'peers': {'short': {'is_initiator': True}}}).encode(),
-            json.dumps({
-                'peers': {'aa' * 32: {'is_initiator': 'yes'}}
-            }).encode(),
-            json.dumps({'peers': {'aa' * 32: {}}}).encode(),
+            b"not json",
+            json.dumps({"peers": "not an object"}).encode(),
+            json.dumps({"peers": {"short": {"is_initiator": True}}}).encode(),
+            json.dumps({"peers": {"aa" * 32: {"is_initiator": "yes"}}}).encode(),
+            json.dumps({"peers": {"aa" * 32: {}}}).encode(),
         ):
             container.store(payload, container.load()[0] + 1)
             with pytest.raises(StorageError):
@@ -711,10 +724,11 @@ class TestPeerDirectory:
         """
         from src.crypto.double_ratchet import PROTOCOL_VERSION, DoubleRatchet
         import nacl.public as public
+
         directory = PeerDirectory(
-            Container.create(str(tmp_path / 'peers.bin'), PASSWORD, kdf_params=FAST)
+            Container.create(str(tmp_path / "peers.bin"), PASSWORD, kdf_params=FAST)
         )
-        sessions = SessionStore(str(tmp_path / 'sessions'), PASSWORD)
+        sessions = SessionStore(str(tmp_path / "sessions"), PASSWORD)
         peer = SigningKey.generate().verify_key
 
         local = public.PrivateKey.generate()
@@ -722,10 +736,10 @@ class TestPeerDirectory:
         ratchet = DoubleRatchet(
             dh_private=local,
             remote_dh_public=bytes(remote.public_key),
-            root_key=b'\x02' * 32,
+            root_key=b"\x02" * 32,
             is_initiator=True,
         )
-        ratchet.encrypt(b'hello')
+        ratchet.encrypt(b"hello")
         sessions.save(peer_id(peer), ratchet.state)
         directory.set(peer, is_initiator=True)
         # The initiator ratchets in the constructor, so the root key on disk is
@@ -735,9 +749,9 @@ class TestPeerDirectory:
 
         # Restart, keeping only the peer's public key and the directory.
         reopened_peers = PeerDirectory(
-            Container.open(str(tmp_path / 'peers.bin'), PASSWORD)
+            Container.open(str(tmp_path / "peers.bin"), PASSWORD)
         )
-        reopened_sessions = SessionStore(str(tmp_path / 'sessions'), PASSWORD)
+        reopened_sessions = SessionStore(str(tmp_path / "sessions"), PASSWORD)
         role = reopened_peers.role_of(peer)
         state = reopened_sessions.load(peer_id(peer), PROTOCOL_VERSION)
         assert role is True
@@ -751,17 +765,15 @@ class TestEndToEndWithStorage:
         left, so the handshake still has forward secrecy -- and still carries an
         ML-KEM contribution, which is the same argument one level up.
         """
-        container_path = str(tmp_path / 'prekeys.bin')
+        container_path = str(tmp_path / "prekeys.bin")
         container = Container.create(container_path, PASSWORD, kdf_params=FAST)
         store = PersistentPreKeyStore(container)
         identity = IdentityStore(
-            Container.create(str(tmp_path / 'identity.bin'), PASSWORD, kdf_params=FAST)
+            Container.create(str(tmp_path / "identity.bin"), PASSWORD, kdf_params=FAST)
         )
         identity.initialise()
         pq_store = PersistentPQPreKeyStore(
-            Container.create(
-                str(tmp_path / 'pqkeys.bin'), PASSWORD, kdf_params=FAST
-            )
+            Container.create(str(tmp_path / "pqkeys.bin"), PASSWORD, kdf_params=FAST)
         )
 
         x3dh = X3DH()
@@ -770,6 +782,7 @@ class TestEndToEndWithStorage:
         pq_store.replenish(0, 4)
 
         from src.crypto.x3dh import X3DHResponder
+
         responder = X3DHResponder(
             identity_private=identity.identity_key,
             signed_prekey_private=identity.signed_prekey_private,
@@ -786,10 +799,10 @@ class TestEndToEndWithStorage:
             Container.open(container_path, PASSWORD)
         )
         reopened_pq = PersistentPQPreKeyStore(
-            Container.open(str(tmp_path / 'pqkeys.bin'), PASSWORD)
+            Container.open(str(tmp_path / "pqkeys.bin"), PASSWORD)
         )
         reopened_identity = IdentityStore(
-            Container.open(str(tmp_path / 'identity.bin'), PASSWORD)
+            Container.open(str(tmp_path / "identity.bin"), PASSWORD)
         )
         responder = X3DHResponder(
             identity_private=reopened_identity.identity_key,

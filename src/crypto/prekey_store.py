@@ -54,9 +54,9 @@ class OneTimePreKey:
 
     def __post_init__(self) -> None:
         if not isinstance(self.key_id, int) or self.key_id < 0:
-            raise ValueError('prekey id must be a non-negative int')
+            raise ValueError("prekey id must be a non-negative int")
         if len(bytes(self.public_key)) != 32:
-            raise ValueError('one-time prekey public key must be 32 bytes')
+            raise ValueError("one-time prekey public key must be 32 bytes")
 
 
 class PreKeyStore(abc.ABC):
@@ -137,7 +137,7 @@ class PreKeyStore(abc.ABC):
         for key in keys:
             self.put(key)
 
-    def replenish(self, low_water_mark: int, target: int = None) -> int:
+    def replenish(self, low_water_mark: int, target: Optional[int] = None) -> int:
         """
         Top the pool up to ``target`` keys, generating new ones as needed.
 
@@ -152,12 +152,12 @@ class PreKeyStore(abc.ABC):
                 the implementation limit.
         """
         if low_water_mark < 0:
-            raise ValueError('low_water_mark must be non-negative')
+            raise ValueError("low_water_mark must be non-negative")
         target = low_water_mark if target is None else target
         if target < low_water_mark:
-            raise ValueError('target must be at least low_water_mark')
+            raise ValueError("target must be at least low_water_mark")
         if target > MAX_PREKEYS:
-            raise ValueError(f'target exceeds the {MAX_PREKEYS} limit')
+            raise ValueError(f"target exceeds the {MAX_PREKEYS} limit")
         added = 0
         while self.count() < target:
             self.put(make_one_time_prekey())
@@ -183,7 +183,7 @@ class InMemoryPreKeyStore(PreKeyStore):
         with self._lock:
             if key.key_id in self._used:
                 raise OneTimePreKeyAlreadyUsed(
-                    f'prekey id {key.key_id} was already consumed'
+                    f"prekey id {key.key_id} was already consumed"
                 )
             self._keys[key.key_id] = key
 
@@ -191,11 +191,11 @@ class InMemoryPreKeyStore(PreKeyStore):
         with self._lock:
             if key_id in self._used:
                 raise OneTimePreKeyAlreadyUsed(
-                    f'prekey id {key_id} was already consumed'
+                    f"prekey id {key_id} was already consumed"
                 )
             key = self._keys.pop(key_id, None)
             if key is None:
-                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+                raise NoSuchPreKey(f"unknown prekey id {key_id}")
             self._used[key_id] = True
             self._reserved.discard(key_id)
             return key
@@ -213,11 +213,11 @@ class InMemoryPreKeyStore(PreKeyStore):
         with self._lock:
             if key_id in self._used:
                 raise PreKeyStoreError(
-                    f'prekey id {key_id} was already consumed and cannot be '
-                    f'released'
+                    f"prekey id {key_id} was already consumed and cannot be "
+                    f"released"
                 )
             if key_id not in self._keys:
-                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+                raise NoSuchPreKey(f"unknown prekey id {key_id}")
             self._reserved.discard(key_id)
 
     def reserved_ids(self):
@@ -229,11 +229,11 @@ class InMemoryPreKeyStore(PreKeyStore):
         with self._lock:
             if key_id in self._used:
                 raise OneTimePreKeyAlreadyUsed(
-                    f'prekey id {key_id} was already consumed'
+                    f"prekey id {key_id} was already consumed"
                 )
             key = self._keys.get(key_id)
             if key is None:
-                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+                raise NoSuchPreKey(f"unknown prekey id {key_id}")
             return key
 
     def peek_any(self) -> Optional[OneTimePreKey]:
@@ -274,7 +274,8 @@ def generate_prekey_id() -> int:
     replace this with a real counter to keep ids unique across restarts.
     """
     import os
-    return int.from_bytes(os.urandom(8), 'big')
+
+    return int.from_bytes(os.urandom(8), "big")
 
 
 def make_one_time_prekey(key_id: Optional[int] = None) -> OneTimePreKey:
@@ -298,9 +299,7 @@ def stocked_prekey_store(count: int = 4) -> InMemoryPreKeyStore:
     only reachable handshake is the 3-DH variant with no forward secrecy.
     """
     if count < 1:
-        raise PreKeyStoreError(
-            f'a pool needs at least one prekey, asked for {count}'
-        )
+        raise PreKeyStoreError(f"a pool needs at least one prekey, asked for {count}")
     store = InMemoryPreKeyStore()
     for key_id in range(count):
         store.put(make_one_time_prekey(key_id=key_id))

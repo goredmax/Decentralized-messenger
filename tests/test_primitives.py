@@ -34,7 +34,7 @@ from src.crypto.x3dh import X3DH
 
 
 class TestHkdf:
-    @pytest.mark.parametrize('length', [16, 32, 42, 64, 255])
+    @pytest.mark.parametrize("length", [16, 32, 42, 64, 255])
     def test_extract_expand_matches_reference(self, length):
         for _ in range(20):
             salt = nacl.utils.random(nacl.utils.random(1)[0] % 40)
@@ -50,8 +50,8 @@ class TestHkdf:
 
     def test_empty_salt_is_treated_as_zeros(self):
         ikm = nacl.utils.random(32)
-        info = b'ctx'
-        prk = X3DH._hkdf_extract(b'', ikm)
+        info = b"ctx"
+        prk = X3DH._hkdf_extract(b"", ikm)
         reference = HKDF(
             algorithm=hashes.SHA256(), length=32, salt=None, info=info
         ).derive(ikm)
@@ -78,22 +78,21 @@ class TestHkdf:
         labels = [LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK]
         for _ in range(20):
             parts = [
-                DhPart(label, nacl.utils.random(32))
-                for label in labels + [LABEL_KEM]
+                DhPart(label, nacl.utils.random(32)) for label in labels + [LABEL_KEM]
             ][:5]
-            context = b'DecentralizedMessenger-X3DH-v1'
+            context = b"DecentralizedMessenger-X3DH-v1"
             ours = X3DH.derive_master_key(parts, context=context)
 
-            framed = b''.join(
-                len(part.label).to_bytes(4, 'big') + part.label + part.value
+            framed = b"".join(
+                len(part.label).to_bytes(4, "big") + part.label + part.value
                 for part in parts
             )
             theirs = HKDF(
                 algorithm=hashes.SHA256(),
                 length=32,
-                salt=b'\x00' * 32,
+                salt=b"\x00" * 32,
                 info=context,
-            ).derive(b'\xff' * 32 + framed)
+            ).derive(b"\xff" * 32 + framed)
             assert ours == theirs
 
 
@@ -114,7 +113,7 @@ class TestX25519:
     def test_degenerate_input_rejected_by_both(self):
         private = PrivateKey.generate()
         with pytest.raises(Exception):
-            X3DH._dh(private, b'\x00' * 32)
+            X3DH._dh(private, b"\x00" * 32)
 
 
 class TestRatchetKdf:
@@ -122,11 +121,11 @@ class TestRatchetKdf:
         ratchet = DoubleRatchet.__new__(DoubleRatchet)
         root_key = nacl.utils.random(32)
         dh_output = nacl.utils.random(32)
-        info = b'WhisperRatchet-v2'
+        info = b"WhisperRatchet-v2"
 
         new_root, new_chain = ratchet._kdf_rk(root_key, dh_output)
         reference = HKDF(
-            algorithm=hashes.SHA256(), length=64, salt=root_key, info=info + b'\x01'
+            algorithm=hashes.SHA256(), length=64, salt=root_key, info=info + b"\x01"
         ).derive(dh_output)
         assert new_root + new_chain == reference
 

@@ -25,7 +25,8 @@ from src.protocol.verifier import (
 )
 
 from src.crypto.pq import stocked_pq_store
-ALPHABET = '0123456789abcdef'
+
+ALPHABET = "0123456789abcdef"
 
 
 def keypair():
@@ -47,7 +48,7 @@ def differ_at_first_digit(number) -> str:
     the first digit is 'f' that often.
     """
     first = number.digits[0]
-    return ('0' if first != '0' else '1') + number.digits[1:]
+    return ("0" if first != "0" else "1") + number.digits[1:]
 
 
 class TestFormat:
@@ -69,29 +70,30 @@ class TestFormat:
         _, a = keypair()
         _, b = keypair()
         number = safety_number(a.verify_key, b.verify_key)
-        assert str(number) == ' '.join(number.groups)
+        assert str(number) == " ".join(number.groups)
 
     def test_rejects_wrong_length(self):
         with pytest.raises(VerificationError):
-            SafetyNumber(digits='0' * 59, groups=('0' * 59,))
+            SafetyNumber(digits="0" * 59, groups=("0" * 59,))
         with pytest.raises(VerificationError):
-            SafetyNumber(digits='0' * 61, groups=('0' * 61,))
+            SafetyNumber(digits="0" * 61, groups=("0" * 61,))
 
     def test_rejects_non_hex(self):
         from src.protocol.verifier import _split
-        digits = 'z' * 60
+
+        digits = "z" * 60
         with pytest.raises(VerificationError):
             SafetyNumber(digits=digits, groups=_split(digits))
 
     def test_rejects_inconsistent_groups(self):
-        digits = '0' * 60
+        digits = "0" * 60
         with pytest.raises(VerificationError):
-            SafetyNumber(digits=digits, groups=('0' * 5,) * 11)
+            SafetyNumber(digits=digits, groups=("0" * 5,) * 11)
 
     def test_rejects_non_verify_keys(self):
         _, a = keypair()
         with pytest.raises(VerificationError):
-            safety_number(a, b'not a key')  # type: ignore[arg-type]
+            safety_number(a, b"not a key")  # type: ignore[arg-type]
         with pytest.raises(VerificationError):
             safety_number(a.verify_key, a)  # a SigningKey, not a VerifyKey
 
@@ -100,16 +102,17 @@ class TestSymmetry:
     def test_both_sides_derive_the_same_number(self):
         _, a = keypair()
         _, b = keypair()
-        assert (safety_number(a.verify_key, b.verify_key).digits
-                == safety_number(b.verify_key, a.verify_key).digits)
+        assert (
+            safety_number(a.verify_key, b.verify_key).digits
+            == safety_number(b.verify_key, a.verify_key).digits
+        )
 
     def test_order_does_not_matter_for_a_thousand_pairs(self):
         x3dh = X3DH()
         for _ in range(200):
             _, a = x3dh.generate_identity_keys()
             _, b = x3dh.generate_identity_keys()
-            assert (safety_number(a, b).digits
-                    == safety_number(b, a).digits)
+            assert safety_number(a, b).digits == safety_number(b, a).digits
 
     def test_self_comparison_is_stable(self):
         _, a = keypair()
@@ -133,10 +136,14 @@ class TestUniqueness:
         _, a = keypair()
         _, b = keypair()
         baseline = safety_number(a.verify_key, b.verify_key).digits
-        assert safety_number(SigningKey.generate().verify_key,
-                             b.verify_key).digits != baseline
-        assert safety_number(a.verify_key,
-                             SigningKey.generate().verify_key).digits != baseline
+        assert (
+            safety_number(SigningKey.generate().verify_key, b.verify_key).digits
+            != baseline
+        )
+        assert (
+            safety_number(a.verify_key, SigningKey.generate().verify_key).digits
+            != baseline
+        )
 
     def test_swapping_the_pair_changes_the_number(self):
         """
@@ -165,6 +172,7 @@ class TestUniqueness:
         """Two formats must not produce comparable-looking numbers."""
         from src.protocol.verifier import _DOMAIN, FINGERPRINT_VERSION
         import hashlib
+
         _, a = keypair()
         _, b = keypair()
         left = bytes(a.verify_key)
@@ -173,8 +181,10 @@ class TestUniqueness:
             left, right = right, left
         framed = (
             bytes((FINGERPRINT_VERSION,))
-            + len(left).to_bytes(4, 'big') + left
-            + len(right).to_bytes(4, 'big') + right
+            + len(left).to_bytes(4, "big")
+            + left
+            + len(right).to_bytes(4, "big")
+            + right
         )
         ours = hashlib.sha256(_DOMAIN + framed).hexdigest()[:60]
         assert ours == safety_number(a.verify_key, b.verify_key).digits
@@ -209,27 +219,30 @@ class TestComparison:
         theirs = safety_number(local.verify_key, impostor.verify_key)
         # Guards the fixture itself, so a change to the digest derivation fails
         # here with an explanation instead of as a puzzling assertion below.
-        assert ours.digits[0] != theirs.digits[0], (
-            'fixed keys no longer differ at digit 0; pick another seed triple'
-        )
+        assert (
+            ours.digits[0] != theirs.digits[0]
+        ), "fixed keys no longer differ at digit 0; pick another seed triple"
 
         result = verify(local.verify_key, remote.verify_key, theirs)
         assert not result.verified
         assert result.matched_digits == 0
-        assert 'differ at digit 0' in result.describe()
+        assert "differ at digit 0" in result.describe()
 
     def test_single_digit_change_is_detected(self):
         local, remote, number = self._number()
-        flipped = number.digits[:10] + ('0' if number.digits[10] != '0' else '1') \
+        flipped = (
+            number.digits[:10]
+            + ("0" if number.digits[10] != "0" else "1")
             + number.digits[11:]
+        )
         result = verify(local, remote, number.with_digits(flipped))
         assert not result.verified
         assert result.matched_digits == 10
-        assert 'differ at digit 10' in result.describe()
+        assert "differ at digit 10" in result.describe()
 
     def test_last_digit_change_is_detected_on_a_full_comparison(self):
         local, remote, number = self._number()
-        flipped = number.digits[:59] + ('0' if number.digits[59] != '0' else '1')
+        flipped = number.digits[:59] + ("0" if number.digits[59] != "0" else "1")
         result = verify(local, remote, number.with_digits(flipped))
         assert not result.verified
         assert result.matched_digits == 59
@@ -237,13 +250,13 @@ class TestComparison:
     def test_partial_comparison_can_pass_and_is_labelled(self):
         local, remote, number = self._number()
         # Same first 20 digits, different afterwards.
-        tail = '0' * 40
+        tail = "0" * 40
         truncated = number.with_digits(number.digits[:20] + tail)
         result = verify(local, remote, truncated, min_digits=20)
         assert result.verified
         assert result.partial
         assert result.matched_digits == 20
-        assert 'full number was not compared' in result.describe()
+        assert "full number was not compared" in result.describe()
 
     def test_partial_comparison_still_fails_on_an_early_difference(self):
         local, remote, number = self._number()

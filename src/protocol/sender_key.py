@@ -132,13 +132,13 @@ class AttestationStatus:
     """
 
     #: The log's latest entry for this sender is exactly this chain.
-    CURRENT = 'current'
+    CURRENT = "current"
     #: The log has a newer chain for this sender, so this one was rolled back.
-    STALE = 'stale'
+    STALE = "stale"
     #: The log has never heard of this chain id for this sender.
-    UNATTESTED = 'unattested'
+    UNATTESTED = "unattested"
     #: The log itself does not hold together: a broken link or a bad signature.
-    INCONSISTENT = 'inconsistent'
+    INCONSISTENT = "inconsistent"
 
 
 class RollbackDetected(SenderKeyError):
@@ -179,7 +179,7 @@ class ChainAttestation(abc.ABC):
     """
 
     @abc.abstractmethod
-    def check(self, message: 'SenderKeyDistributionMessage') -> str:
+    def check(self, message: "SenderKeyDistributionMessage") -> str:
         """
         Report which of :class:`AttestationStatus` describes ``message``.
 
@@ -203,9 +203,9 @@ class SenderKeyId:
 
     def __post_init__(self) -> None:
         if not isinstance(self.group_id, str) or not self.group_id:
-            raise SenderKeyError('group_id must be a non-empty string')
+            raise SenderKeyError("group_id must be a non-empty string")
         if not isinstance(self.sender, VerifyKey):
-            raise SenderKeyError('sender must be a VerifyKey')
+            raise SenderKeyError("sender must be a VerifyKey")
 
     def __eq__(self, other) -> bool:
         return (
@@ -240,34 +240,37 @@ class SenderKeyDistributionMessage:
     iteration: int
     chain_key: bytes
     signature: bytes
-    chain_id: bytes = b''
+    chain_id: bytes = b""
 
     def __post_init__(self) -> None:
         if not isinstance(self.key_id, SenderKeyId):
-            raise SenderKeyError('key_id must be a SenderKeyId')
-        if not isinstance(self.iteration, int) or isinstance(self.iteration, bool) \
-                or not 0 <= self.iteration <= MAX_ITERATION:
-            raise SenderKeyError(f'iteration out of range: {self.iteration}')
+            raise SenderKeyError("key_id must be a SenderKeyId")
+        if (
+            not isinstance(self.iteration, int)
+            or isinstance(self.iteration, bool)
+            or not 0 <= self.iteration <= MAX_ITERATION
+        ):
+            raise SenderKeyError(f"iteration out of range: {self.iteration}")
         if len(self.chain_key) != _SYMMETRIC_KEY_LEN:
-            raise SenderKeyError(
-                f'chain key must be {_SYMMETRIC_KEY_LEN} bytes'
-            )
+            raise SenderKeyError(f"chain key must be {_SYMMETRIC_KEY_LEN} bytes")
         if len(self.signature) != 64:
-            raise SenderKeyError('signature must be 64 bytes')
+            raise SenderKeyError("signature must be 64 bytes")
         if len(self.chain_id) != _CHAIN_ID_LEN:
-            raise SenderKeyError(f'chain_id must be {_CHAIN_ID_LEN} bytes')
+            raise SenderKeyError(f"chain_id must be {_CHAIN_ID_LEN} bytes")
 
     def _signed_bytes(self) -> bytes:
-        return b''.join([
-            _u32(len(self.key_id.group_id.encode('utf-8'))),
-            self.key_id.group_id.encode('utf-8'),
-            bytes(self.key_id.sender),
-            _u32(self.iteration),
-            self.chain_key,
-            self.chain_id,
-        ])
+        return b"".join(
+            [
+                _u32(len(self.key_id.group_id.encode("utf-8"))),
+                self.key_id.group_id.encode("utf-8"),
+                bytes(self.key_id.sender),
+                _u32(self.iteration),
+                self.chain_key,
+                self.chain_id,
+            ]
+        )
 
-    def sign(self, identity_key: SigningKey) -> 'SenderKeyDistributionMessage':
+    def sign(self, identity_key: SigningKey) -> "SenderKeyDistributionMessage":
         """
         Sign with the sender's identity key.
 
@@ -278,7 +281,7 @@ class SenderKeyDistributionMessage:
         """
         if bytes(identity_key.verify_key) != bytes(self.key_id.sender):
             raise SenderKeyError(
-                'signing key does not match the identity key in the key id'
+                "signing key does not match the identity key in the key id"
             )
         return replace(
             self, signature=identity_key.sign(self._signed_bytes()).signature
@@ -294,11 +297,11 @@ class SenderKeyDistributionMessage:
         try:
             self.key_id.sender.verify(self._signed_bytes(), self.signature)
         except BadSignatureError as exc:
-            raise SenderKeyError('sender key signature does not verify') from exc
+            raise SenderKeyError("sender key signature does not verify") from exc
 
 
 def _u32(value: int) -> bytes:
-    return value.to_bytes(4, 'big')
+    return value.to_bytes(4, "big")
 
 
 @dataclass
@@ -313,18 +316,18 @@ class SenderKeyState:
     key_id: SenderKeyId
     chain_key: bytes
     iteration: int = 0
-    chain_id: bytes = b''
+    chain_id: bytes = b""
 
     def __post_init__(self) -> None:
         if len(self.chain_key) != _SYMMETRIC_KEY_LEN:
-            raise SenderKeyError('chain key must be 32 bytes')
+            raise SenderKeyError("chain key must be 32 bytes")
         if len(self.chain_id) != _CHAIN_ID_LEN:
-            raise SenderKeyError('chain id must be 32 bytes')
+            raise SenderKeyError("chain id must be 32 bytes")
         if self.iteration >= MAX_ITERATION:
-            raise SenderKeyError('sender key exhausted; rotate it')
+            raise SenderKeyError("sender key exhausted; rotate it")
 
     @classmethod
-    def create(cls, group_id: str, identity_key: SigningKey) -> 'SenderKeyState':
+    def create(cls, group_id: str, identity_key: SigningKey) -> "SenderKeyState":
         """Start a fresh chain for a group."""
         return cls(
             key_id=SenderKeyId(group_id=group_id, sender=identity_key.verify_key),
@@ -333,7 +336,7 @@ class SenderKeyState:
             chain_id=nacl.utils.random(_CHAIN_ID_LEN),
         )
 
-    def rotate(self) -> 'SenderKeyState':
+    def rotate(self) -> "SenderKeyState":
         """
         Replace the chain with a fresh random one and a fresh chain id.
 
@@ -372,7 +375,7 @@ class SenderKeyState:
             key_id=self.key_id,
             iteration=self.iteration,
             chain_key=self.chain_key,
-            signature=b'\x00' * 64,
+            signature=b"\x00" * 64,
             chain_id=self.chain_id,
         )
 
@@ -384,8 +387,8 @@ def _kdf_ck(chain_key: bytes) -> Tuple[bytes, bytes]:
     Next chain key is ``HMAC(ck, 0x01)``, message key is ``HMAC(ck, 0x02)``.
     Sharing the construction means the two subsystems cannot drift apart.
     """
-    next_chain_key = hmac.new(chain_key, b'\x01', hashlib.sha256).digest()
-    message_key = hmac.new(chain_key, b'\x02', hashlib.sha256).digest()
+    next_chain_key = hmac.new(chain_key, b"\x01", hashlib.sha256).digest()
+    message_key = hmac.new(chain_key, b"\x02", hashlib.sha256).digest()
     return next_chain_key, message_key
 
 
@@ -402,12 +405,12 @@ class SenderKeySession:
     chain_key: bytes
     iteration: int = 0
     identity_key: Optional[VerifyKey] = None
-    chain_id: bytes = b''
+    chain_id: bytes = b""
 
     @classmethod
     def from_distribution(
         cls, message: SenderKeyDistributionMessage
-    ) -> 'SenderKeySession':
+    ) -> "SenderKeySession":
         """Adopt a verified distribution message."""
         return cls(
             key_id=message.key_id,
@@ -427,19 +430,22 @@ class SenderKeySession:
             SenderKeyReplay: the iteration was already consumed.
             SenderKeySkippedTooFar: the gap exceeds the catch-up budget.
         """
-        if not isinstance(target_iteration, int) or \
-                isinstance(target_iteration, bool) or target_iteration < 0:
-            raise SenderKeyError('target_iteration must be a non-negative int')
+        if (
+            not isinstance(target_iteration, int)
+            or isinstance(target_iteration, bool)
+            or target_iteration < 0
+        ):
+            raise SenderKeyError("target_iteration must be a non-negative int")
         if target_iteration < self.iteration:
             raise SenderKeyReplay(
-                f'iteration {target_iteration} was already consumed, this '
-                f'session is at {self.iteration}'
+                f"iteration {target_iteration} was already consumed, this "
+                f"session is at {self.iteration}"
             )
         gap = target_iteration - self.iteration
         if gap > SenderKeySkippedTooFar.MAX_CATCH_UP:
             raise SenderKeySkippedTooFar(
-                f'gap of {gap} exceeds the catch-up budget of '
-                f'{SenderKeySkippedTooFar.MAX_CATCH_UP}'
+                f"gap of {gap} exceeds the catch-up budget of "
+                f"{SenderKeySkippedTooFar.MAX_CATCH_UP}"
             )
 
         chain_key = self.chain_key
@@ -475,12 +481,15 @@ class SenderKeyMessage:
 
     def __post_init__(self) -> None:
         if not isinstance(self.key_id, SenderKeyId):
-            raise SenderKeyError('key_id must be a SenderKeyId')
-        if not isinstance(self.iteration, int) or isinstance(self.iteration, bool) \
-                or not 0 <= self.iteration <= MAX_ITERATION:
-            raise SenderKeyError(f'iteration out of range: {self.iteration}')
+            raise SenderKeyError("key_id must be a SenderKeyId")
+        if (
+            not isinstance(self.iteration, int)
+            or isinstance(self.iteration, bool)
+            or not 0 <= self.iteration <= MAX_ITERATION
+        ):
+            raise SenderKeyError(f"iteration out of range: {self.iteration}")
         if len(self.ciphertext) < 24 + 16:
-            raise SenderKeyError('ciphertext is too short to be a nonce and tag')
+            raise SenderKeyError("ciphertext is too short to be a nonce and tag")
 
 
 class SessionCipher:
@@ -494,7 +503,7 @@ class SessionCipher:
 
     def __init__(self, identity_key: SigningKey):
         if not isinstance(identity_key, SigningKey):
-            raise SenderKeyError('identity_key must be a SigningKey')
+            raise SenderKeyError("identity_key must be a SigningKey")
         self._identity_key = identity_key
         self._outgoing: Dict[str, SenderKeyState] = {}
         self._builder = SenderKeySessionBuilder()
@@ -526,9 +535,7 @@ class SessionCipher:
         this after sending advances it further and the recipients catch up by
         iterating.
         """
-        return self.sender_key(group_id).distribution_message().sign(
-            self._identity_key
-        )
+        return self.sender_key(group_id).distribution_message().sign(self._identity_key)
 
     def encrypt(
         self, plaintext: bytes, group_id: str
@@ -552,7 +559,7 @@ class SessionCipher:
         message_key, iteration = state.next_message_key()
         nonce = nacl.utils.random(24)
         ciphertext = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
-            plaintext, b'', nonce, message_key
+            plaintext, b"", nonce, message_key
         )
         message = SenderKeyMessage(
             key_id=state.key_id,
@@ -561,9 +568,7 @@ class SessionCipher:
         )
         return message, self.distribution_for(group_id)
 
-    def rotate_after_removal(
-        self, group_id: str
-    ) -> SenderKeyDistributionMessage:
+    def rotate_after_removal(self, group_id: str) -> SenderKeyDistributionMessage:
         """
         Replace the sending chain after a member was removed.
 
@@ -580,7 +585,7 @@ class SessionCipher:
     # ------------------------------------------------------------------
 
     @property
-    def builder(self) -> 'SenderKeySessionBuilder':
+    def builder(self) -> "SenderKeySessionBuilder":
         """The receiving state. Exposed for inspection and removal."""
         return self._builder
 
@@ -619,12 +624,12 @@ class SessionCipher:
         body = message.ciphertext[24:]
         try:
             return nacl.bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
-                body, b'', nonce, message_key
+                body, b"", nonce, message_key
             )
         except Exception as exc:
             raise SenderKeyError(
-                'group message failed authentication: altered in transit, or the '
-                'session is out of step with the sender'
+                "group message failed authentication: altered in transit, or the "
+                "session is out of step with the sender"
             ) from exc
 
     def remove_member(self, group_id: str, member: VerifyKey) -> None:
@@ -695,14 +700,14 @@ class SenderKeySessionBuilder:
             status = attestation.check(message)
             if status == AttestationStatus.INCONSISTENT:
                 raise InconsistentLog(
-                    'the log could not be verified against what this member '
-                    'already holds, so it cannot justify trusting a chain'
+                    "the log could not be verified against what this member "
+                    "already holds, so it cannot justify trusting a chain"
                 )
             if status == AttestationStatus.STALE:
                 raise RollbackDetected(
-                    'the log records a newer chain for this sender in this '
-                    'group, so the distribution message in hand is a replay of '
-                    'an older one'
+                    "the log records a newer chain for this sender in this "
+                    "group, so the distribution message in hand is a replay of "
+                    "an older one"
                 )
 
         if message.chain_id in known:
@@ -715,8 +720,7 @@ class SenderKeySessionBuilder:
                 existing.chain_key = message.chain_key
                 existing.iteration = message.iteration
                 existing.chain_id = message.chain_id
-            if attestation is not None and \
-                    status == AttestationStatus.UNATTESTED:
+            if attestation is not None and status == AttestationStatus.UNATTESTED:
                 # The log has not seen this chain, which means it is not the one
                 # the log knows about -- but it is the one we already trust, so
                 # refusing it would break a conversation the log is only being
@@ -755,8 +759,8 @@ class SenderKeySessionBuilder:
         session = self._sessions.get(key_id)
         if session is None:
             raise UntrustedSenderKey(
-                f'no sender key session for {key_id.group_id} from this sender; '
-                f'process a distribution message first'
+                f"no sender key session for {key_id.group_id} from this sender; "
+                f"process a distribution message first"
             )
         return session
 

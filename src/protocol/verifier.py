@@ -49,7 +49,7 @@ _DIGITS = _DIGEST_BYTES * 2
 _GROUP_SIZE = 5
 _GROUPS = _DIGITS // _GROUP_SIZE
 
-_HEX = '0123456789abcdef'
+_HEX = "0123456789abcdef"
 
 #: How many leading digits must match for a verification to pass. Kept at the
 #: full number by default: a prefix match is a strong signal, not proof.
@@ -84,17 +84,15 @@ class SafetyNumber:
     def __post_init__(self) -> None:
         if len(self.digits) != _DIGITS:
             raise VerificationError(
-                f'safety number must have {_DIGITS} digits, got {len(self.digits)}'
+                f"safety number must have {_DIGITS} digits, got {len(self.digits)}"
             )
         for character in self.digits:
             if character not in _HEX:
-                raise VerificationError(
-                    'safety number must be lowercase hexadecimal'
-                )
+                raise VerificationError("safety number must be lowercase hexadecimal")
         if tuple(self.groups) != _split(self.digits):
-            raise VerificationError('groups do not match digits')
+            raise VerificationError("groups do not match digits")
 
-    def matches(self, other: 'SafetyNumber', digits: int = DEFAULT_MIN_DIGITS) -> int:
+    def matches(self, other: "SafetyNumber", digits: int = DEFAULT_MIN_DIGITS) -> int:
         """
         Count the leading digits that agree with ``other``.
 
@@ -105,17 +103,17 @@ class SafetyNumber:
             VerificationError: ``other`` uses a different format version.
         """
         if not isinstance(other, SafetyNumber):
-            raise VerificationError('other must be a SafetyNumber')
+            raise VerificationError("other must be a SafetyNumber")
         if other.version != self.version:
             raise VerificationError(
-                f'version mismatch: {other.version} != {self.version}'
+                f"version mismatch: {other.version} != {self.version}"
             )
         for index in range(min(digits, _DIGITS)):
             if self.digits[index] != other.digits[index]:
                 return index
         return min(digits, _DIGITS)
 
-    def with_digits(self, digits: str) -> 'SafetyNumber':
+    def with_digits(self, digits: str) -> "SafetyNumber":
         """
         Return a copy carrying ``digits``.
 
@@ -125,7 +123,7 @@ class SafetyNumber:
         return SafetyNumber(digits=digits, groups=_split(digits))
 
     def __str__(self) -> str:
-        return ' '.join(self.groups)
+        return " ".join(self.groups)
 
 
 @dataclass(frozen=True)
@@ -145,20 +143,20 @@ class VerificationResult:
     def describe(self) -> str:
         if not self.verified:
             return (
-                f'keys do not match: they differ at digit {self.matched_digits} '
-                f'of {self.total_digits}'
+                f"keys do not match: they differ at digit {self.matched_digits} "
+                f"of {self.total_digits}"
             )
         if self.partial:
             return (
-                f'first {self.matched_digits} digits match, '
-                f'the full number was not compared'
+                f"first {self.matched_digits} digits match, "
+                f"the full number was not compared"
             )
-        return f'keys match on all {self.total_digits} digits'
+        return f"keys match on all {self.total_digits} digits"
 
 
 def _split(digits: str) -> Tuple[str, ...]:
     return tuple(
-        digits[index:index + _GROUP_SIZE]
+        digits[index : index + _GROUP_SIZE]
         for index in range(0, len(digits), _GROUP_SIZE)
     )
 
@@ -177,8 +175,10 @@ def _digest(identity_a: VerifyKey, identity_b: VerifyKey) -> bytes:
         left, right = right, left
     framed = (
         bytes((FINGERPRINT_VERSION,))
-        + len(left).to_bytes(4, 'big') + left
-        + len(right).to_bytes(4, 'big') + right
+        + len(left).to_bytes(4, "big")
+        + left
+        + len(right).to_bytes(4, "big")
+        + right
     )
     return hashlib.sha256(_DOMAIN + framed).digest()[:_DIGEST_BYTES]
 
@@ -195,12 +195,12 @@ def safety_number(identity_a: VerifyKey, identity_b: VerifyKey) -> SafetyNumber:
         A :class:`SafetyNumber` of 60 hexadecimal digits in twelve groups.
     """
     if not isinstance(identity_a, VerifyKey) or not isinstance(identity_b, VerifyKey):
-        raise VerificationError('both arguments must be VerifyKey')
+        raise VerificationError("both arguments must be VerifyKey")
 
     digest = _digest(identity_a, identity_b)
-    digits = ''.join(_HEX[byte >> 4] + _HEX[byte & 0x0F] for byte in digest)
-    if len(digits) != _DIGITS:                 # pragma: no cover - arithmetic
-        raise VerificationError('internal: wrong digit count')
+    digits = "".join(_HEX[byte >> 4] + _HEX[byte & 0x0F] for byte in digest)
+    if len(digits) != _DIGITS:  # pragma: no cover - arithmetic
+        raise VerificationError("internal: wrong digit count")
     return SafetyNumber(digits=digits, groups=_split(digits))
 
 
@@ -239,10 +239,10 @@ def verify(
     """
     if min_digits < MINIMUM_USEFUL_DIGITS:
         raise SafetyNumberTooShortError(
-            f'min_digits must be at least {MINIMUM_USEFUL_DIGITS}, got {min_digits}'
+            f"min_digits must be at least {MINIMUM_USEFUL_DIGITS}, got {min_digits}"
         )
     if min_digits > _DIGITS:
-        raise SafetyNumberTooShortError(f'min_digits cannot exceed {_DIGITS}')
+        raise SafetyNumberTooShortError(f"min_digits cannot exceed {_DIGITS}")
     ours = safety_number(local_identity, remote_identity)
     matched = ours.matches(theirs, min_digits)
     return VerificationResult(

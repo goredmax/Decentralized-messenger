@@ -63,11 +63,11 @@ def make_initiator():
 def replace(structure, **changes) -> HandshakeInit:
     """Copy a frozen dataclass with some fields replaced."""
     values = {
-        'identity_key': structure.identity_key,
-        'identity_key_x25519': structure.identity_key_x25519,
-        'ephemeral_key': structure.ephemeral_key,
-        'signature': structure.signature,
-        'one_time_prekey_id': structure.one_time_prekey_id,
+        "identity_key": structure.identity_key,
+        "identity_key_x25519": structure.identity_key_x25519,
+        "ephemeral_key": structure.ephemeral_key,
+        "signature": structure.signature,
+        "one_time_prekey_id": structure.one_time_prekey_id,
     }
     values.update(changes)
     return HandshakeInit(**values)
@@ -163,36 +163,41 @@ class TestBundleAuthentication:
             identity_private_x25519,
             identity_public_x25519,
         )
+
         alice_ik_x = identity_private_x25519(alice_private).public_key
         attacker_parts = [
-            DhPart(LABEL_IK_SPK,
-                   x3dh._dh(attacker_spk_private, alice_ik_x)),
-            DhPart(LABEL_EK_IK,
-                   x3dh._dh(alice_ephemeral,
-                            identity_public_x25519(honest.identity_key))),
-            DhPart(LABEL_EK_SPK,
-                   x3dh._dh(alice_ephemeral, attacker_spk_private.public_key)),
+            DhPart(LABEL_IK_SPK, x3dh._dh(attacker_spk_private, alice_ik_x)),
+            DhPart(
+                LABEL_EK_IK,
+                x3dh._dh(alice_ephemeral, identity_public_x25519(honest.identity_key)),
+            ),
+            DhPart(
+                LABEL_EK_SPK, x3dh._dh(alice_ephemeral, attacker_spk_private.public_key)
+            ),
         ]
         if tampered.one_time_prekey is not None:
-            attacker_parts.append(DhPart(
-                LABEL_EK_OPK,
-                x3dh._dh(alice_ephemeral, tampered.one_time_prekey),
-            ))
+            attacker_parts.append(
+                DhPart(
+                    LABEL_EK_OPK,
+                    x3dh._dh(alice_ephemeral, tampered.one_time_prekey),
+                )
+            )
         if tampered.pq_prekey is not None:
-            attacker_parts.append(DhPart(
-                LABEL_KEM,
-                pq_decapsulate(attacker_pq_private, pq_ciphertext),
-            ))
+            attacker_parts.append(
+                DhPart(
+                    LABEL_KEM,
+                    pq_decapsulate(attacker_pq_private, pq_ciphertext),
+                )
+            )
 
         assert alice_parts == tuple(attacker_parts)
         assert len(alice_parts) == 5
         assert alice_parts[-1].label == LABEL_KEM
         # The keys are not merely the same parts, they are the same root key --
         # which is what makes this an attack and not a curiosity.
-        assert x3dh.derive_master_key(alice_parts) == \
-            x3dh.derive_master_key(attacker_parts), (
-            'test is not demonstrating the attack: keys differ'
-        )
+        assert x3dh.derive_master_key(alice_parts) == x3dh.derive_master_key(
+            attacker_parts
+        ), "test is not demonstrating the attack: keys differ"
 
         # And the fixed code refuses the very same bundle.
         with pytest.raises(InvalidSignatureError):
@@ -209,7 +214,7 @@ class TestBundleAuthentication:
         attacker_signing = SigningKey.generate()
         attacker_spk = PrivateKey.generate().public_key
         forged = PreKeyBundle(
-            identity_key=honest.identity_key,          # still Bob's real key
+            identity_key=honest.identity_key,  # still Bob's real key
             signed_prekey=attacker_spk,
             signed_prekey_signature=attacker_signing.sign(
                 attacker_spk.encode()
@@ -222,8 +227,10 @@ class TestBundleAuthentication:
     def test_corrupted_signature_is_rejected(self):
         x3dh, responder, _, _ = make_responder()
         honest = responder.publish_bundle()
-        broken = bytes([honest.signed_prekey_signature[0] ^ 0xFF]) + \
-            honest.signed_prekey_signature[1:]
+        broken = (
+            bytes([honest.signed_prekey_signature[0] ^ 0xFF])
+            + honest.signed_prekey_signature[1:]
+        )
         tampered = PreKeyBundle(
             identity_key=honest.identity_key,
             signed_prekey=honest.signed_prekey,
@@ -249,7 +256,7 @@ class TestBundleAuthentication:
             PreKeyBundle(
                 identity_key=make_responder()[3],
                 signed_prekey=PrivateKey.generate().public_key,
-                signed_prekey_signature=b'\x00' * 64,
+                signed_prekey_signature=b"\x00" * 64,
                 one_time_prekey=PrivateKey.generate().public_key,
                 one_time_prekey_id=None,  # id without the key
             )
@@ -285,6 +292,7 @@ class TestInitiatorAuthentication:
 
         mallory_private, mallory_public = x3dh.generate_identity_keys()
         from src.crypto.key_management import identity_public_x25519
+
         tampered = replace(
             init,
             identity_key=mallory_public,
@@ -301,6 +309,7 @@ class TestInitiatorAuthentication:
 
         _, other_public = x3dh.generate_identity_keys()
         from src.crypto.key_management import identity_public_x25519
+
         tampered = replace(
             init, identity_key_x25519=identity_public_x25519(other_public)
         )
@@ -311,20 +320,21 @@ class TestInitiatorAuthentication:
         x3dh, responder, _, _ = make_responder()
         _, alice_private, _ = make_initiator()
         _, init = x3dh.initiate_handshake(
-            alice_private, responder.publish_bundle(), associated_data=b'ctx-a'
+            alice_private, responder.publish_bundle(), associated_data=b"ctx-a"
         )
         with pytest.raises(InvalidSignatureError):
-            responder.handle_init(init, associated_data=b'ctx-b')
+            responder.handle_init(init, associated_data=b"ctx-b")
 
     def test_responder_rejects_unsigned_handshake(self):
         x3dh, responder, _, _ = make_responder()
         alice_private, alice_public = x3dh.generate_identity_keys()
         from src.crypto.key_management import identity_public_x25519
+
         forged = HandshakeInit(
             identity_key=alice_public,
             identity_key_x25519=identity_public_x25519(alice_public),
             ephemeral_key=PrivateKey.generate().public_key,
-            signature=b'\x00' * 64,
+            signature=b"\x00" * 64,
         )
         with pytest.raises(InvalidSignatureError):
             responder.handle_init(forged)
@@ -333,7 +343,7 @@ class TestInitiatorAuthentication:
         """The old API accepted a bare public key; that path is gone."""
         x3dh, responder, _, _ = make_responder()
         with pytest.raises(InvalidHandshakeError):
-            responder.handle_init('not-a-handshake')  # type: ignore[arg-type]
+            responder.handle_init("not-a-handshake")  # type: ignore[arg-type]
 
 
 class TestOneTimePreKeyEnforcement:

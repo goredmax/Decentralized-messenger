@@ -54,15 +54,17 @@ MAX_PREKEYS = 100_000
 
 def _b64(raw: bytes) -> str:
     import base64
-    return base64.b64encode(raw).decode('ascii')
+
+    return base64.b64encode(raw).decode("ascii")
 
 
 def _unb64(text: str, what: str) -> bytes:
     import base64
+
     try:
-        return base64.b64decode(text.encode('ascii'), validate=True)
+        return base64.b64decode(text.encode("ascii"), validate=True)
     except Exception as exc:
-        raise StorageError(f'{what} is not valid base64') from exc
+        raise StorageError(f"{what} is not valid base64") from exc
 
 
 class PersistentPreKeyStore(PreKeyStore):
@@ -93,26 +95,26 @@ class PersistentPreKeyStore(PreKeyStore):
         epoch, raw = self._container.load(minimum_epoch=self._minimum_epoch)
         self._epoch = epoch
         try:
-            document = json.loads(raw.decode('utf-8')) if raw else {}
+            document = json.loads(raw.decode("utf-8")) if raw else {}
         except (ValueError, UnicodeDecodeError) as exc:
-            raise StorageError('prekey store payload is not valid JSON') from exc
+            raise StorageError("prekey store payload is not valid JSON") from exc
         if not isinstance(document, dict):
-            raise StorageError('prekey store payload must be an object')
+            raise StorageError("prekey store payload must be an object")
 
         keys: Dict[int, OneTimePreKey] = {}
-        for entry in document.get('keys') or []:
-            key_id = int(entry['id'])
-            private = PrivateKey(_unb64(entry['private'], 'prekey private key'))
-            public = PublicKey(_unb64(entry['public'], 'prekey public key'))
+        for entry in document.get("keys") or []:
+            key_id = int(entry["id"])
+            private = PrivateKey(_unb64(entry["private"], "prekey private key"))
+            public = PublicKey(_unb64(entry["public"], "prekey public key"))
             if bytes(private.public_key) != bytes(public):
                 raise StorageError(
-                    f'prekey {key_id} public key does not match its private key'
+                    f"prekey {key_id} public key does not match its private key"
                 )
             keys[key_id] = OneTimePreKey(
                 key_id=key_id, private_key=private, public_key=public
             )
-        used = {int(value) for value in document.get('used') or []}
-        reserved = {int(value) for value in document.get('reserved') or []}
+        used = {int(value) for value in document.get("used") or []}
+        reserved = {int(value) for value in document.get("reserved") or []}
         self._keys = keys
         self._used = {key_id: True for key_id in used}
         # A reservation on a consumed key is meaningless, and trusting a file
@@ -121,20 +123,20 @@ class PersistentPreKeyStore(PreKeyStore):
 
     def _flush(self) -> None:
         document = {
-            'keys': [
+            "keys": [
                 {
-                    'id': key.key_id,
-                    'private': _b64(bytes(key.private_key)),
-                    'public': _b64(bytes(key.public_key)),
+                    "id": key.key_id,
+                    "private": _b64(bytes(key.private_key)),
+                    "public": _b64(bytes(key.public_key)),
                 }
                 for key in self._keys.values()
             ],
-            'used': sorted(self._used),
-            'reserved': sorted(self._reserved),
+            "used": sorted(self._used),
+            "reserved": sorted(self._reserved),
         }
         self._epoch += 1
         self._container.store(
-            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+            json.dumps(document, sort_keys=True).encode("utf-8"), self._epoch
         )
 
     # ------------------------------------------------------------------
@@ -145,12 +147,12 @@ class PersistentPreKeyStore(PreKeyStore):
         with self._lock:
             if key.key_id in self._used:
                 raise OneTimePreKeyAlreadyUsed(
-                    f'prekey id {key.key_id} was already consumed'
+                    f"prekey id {key.key_id} was already consumed"
                 )
             if key.key_id in self._keys:
-                raise PreKeyStoreError(f'prekey id {key.key_id} already present')
+                raise PreKeyStoreError(f"prekey id {key.key_id} already present")
             if len(self._keys) >= MAX_PREKEYS:
-                raise PreKeyStoreError(f'prekey pool is full ({MAX_PREKEYS})')
+                raise PreKeyStoreError(f"prekey pool is full ({MAX_PREKEYS})")
             self._keys[key.key_id] = key
             try:
                 self._flush()
@@ -163,11 +165,11 @@ class PersistentPreKeyStore(PreKeyStore):
         with self._lock:
             if key_id in self._used:
                 raise OneTimePreKeyAlreadyUsed(
-                    f'prekey id {key_id} was already consumed'
+                    f"prekey id {key_id} was already consumed"
                 )
             key = self._keys.get(key_id)
             if key is None:
-                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+                raise NoSuchPreKey(f"unknown prekey id {key_id}")
 
             del self._keys[key_id]
             self._used[key_id] = True
@@ -185,25 +187,27 @@ class PersistentPreKeyStore(PreKeyStore):
         with self._lock:
             if key_id in self._used:
                 raise OneTimePreKeyAlreadyUsed(
-                    f'prekey id {key_id} was already consumed'
+                    f"prekey id {key_id} was already consumed"
                 )
             key = self._keys.get(key_id)
             if key is None:
-                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+                raise NoSuchPreKey(f"unknown prekey id {key_id}")
             return key
 
     def peek_any(self) -> Optional[OneTimePreKey]:
         with self._lock:
-            available = [key_id for key_id in sorted(self._keys)
-                         if key_id not in self._reserved]
+            available = [
+                key_id for key_id in sorted(self._keys) if key_id not in self._reserved
+            ]
             if not available:
                 return None
             return self._keys[available[0]]
 
     def reserve_next(self) -> Optional[OneTimePreKey]:
         with self._lock:
-            available = [key_id for key_id in sorted(self._keys)
-                         if key_id not in self._reserved]
+            available = [
+                key_id for key_id in sorted(self._keys) if key_id not in self._reserved
+            ]
             if not available:
                 return None
             key_id = available[0]
@@ -219,11 +223,11 @@ class PersistentPreKeyStore(PreKeyStore):
         with self._lock:
             if key_id in self._used:
                 raise PreKeyStoreError(
-                    f'prekey id {key_id} was already consumed and cannot be '
-                    f'released'
+                    f"prekey id {key_id} was already consumed and cannot be "
+                    f"released"
                 )
             if key_id not in self._keys:
-                raise NoSuchPreKey(f'unknown prekey id {key_id}')
+                raise NoSuchPreKey(f"unknown prekey id {key_id}")
             self._reserved.discard(key_id)
             self._flush()
 
@@ -251,13 +255,14 @@ class PersistentPreKeyStore(PreKeyStore):
         at or above ``low_water_mark``.
         """
         from ..crypto.prekey_store import MAX_PREKEYS, make_one_time_prekey
+
         if low_water_mark < 0:
-            raise ValueError('low_water_mark must be non-negative')
+            raise ValueError("low_water_mark must be non-negative")
         target = low_water_mark if target is None else target
         if target < low_water_mark:
-            raise ValueError('target must be at least low_water_mark')
+            raise ValueError("target must be at least low_water_mark")
         if target > MAX_PREKEYS:
-            raise ValueError(f'target exceeds the {MAX_PREKEYS} limit')
+            raise ValueError(f"target exceeds the {MAX_PREKEYS} limit")
         added = 0
         while self.count() < target:
             self.put(make_one_time_prekey())
@@ -289,7 +294,7 @@ class PersistentPQPreKeyStore(PQPreKeyStore):
         self._container = container
         self._minimum_epoch = minimum_epoch
         self._lock = threading.Lock()
-        self._prekeys: Dict[int, 'PQOneTimePreKey'] = {}
+        self._prekeys: Dict[int, "PQOneTimePreKey"] = {}
         self._consumed: set = set()
         self._reserved: set = set()
         self._epoch = 0
@@ -301,45 +306,41 @@ class PersistentPQPreKeyStore(PQPreKeyStore):
         if not raw:
             return
         try:
-            document = json.loads(raw.decode('utf-8'))
+            document = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
-            raise StorageError(
-                'post-quantum prekey payload is not valid JSON'
-            ) from exc
-        entries = document.get('prekeys')
+            raise StorageError("post-quantum prekey payload is not valid JSON") from exc
+        entries = document.get("prekeys")
         if not isinstance(entries, dict):
-            raise StorageError(
-                'post-quantum prekey payload has no prekeys object'
-            )
+            raise StorageError("post-quantum prekey payload has no prekeys object")
         for key_id, encoded in entries.items():
             try:
                 numeric = int(key_id)
             except (TypeError, ValueError) as exc:
                 raise StorageError(
-                    f'post-quantum prekey id {key_id!r} is not an integer'
+                    f"post-quantum prekey id {key_id!r} is not an integer"
                 ) from exc
             try:
                 self._prekeys[numeric] = PQOneTimePreKey.from_seed(
-                    numeric, _unb64(encoded, 'post-quantum prekey')
+                    numeric, _unb64(encoded, "post-quantum prekey")
                 )
             except PQError as exc:
                 raise StorageError(
-                    f'post-quantum prekey {numeric} could not be restored'
+                    f"post-quantum prekey {numeric} could not be restored"
                 ) from exc
-        consumed = document.get('consumed') or []
+        consumed = document.get("consumed") or []
         if not isinstance(consumed, list):
-            raise StorageError('consumed must be a list of prekey ids')
+            raise StorageError("consumed must be a list of prekey ids")
         for value in consumed:
             try:
                 self._consumed.add(int(value))
             except (TypeError, ValueError) as exc:
                 raise StorageError(
-                    f'consumed entry {value!r} is not an integer'
+                    f"consumed entry {value!r} is not an integer"
                 ) from exc
 
     def _flush(self) -> None:
         document = {
-            'prekeys': {
+            "prekeys": {
                 str(key_id): _b64(prekey.seed)
                 for key_id, prekey in sorted(self._prekeys.items())
             },
@@ -348,64 +349,58 @@ class PersistentPQPreKeyStore(PQPreKeyStore):
             # prekey that is used twice is a prekey whose contribution is
             # recoverable from two handshakes -- which is the entire property
             # this pool exists to provide.
-            'consumed': sorted(self._consumed),
+            "consumed": sorted(self._consumed),
         }
         self._epoch += 1
         self._container.store(
-            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+            json.dumps(document, sort_keys=True).encode("utf-8"), self._epoch
         )
 
-    def put(self, prekey: 'PQOneTimePreKey') -> None:
+    def put(self, prekey: "PQOneTimePreKey") -> None:
         with self._lock:
             if not isinstance(prekey, PQOneTimePreKey):
-                raise StorageError('put expects a PQOneTimePreKey')
+                raise StorageError("put expects a PQOneTimePreKey")
             if prekey.key_id in self._prekeys or prekey.key_id in self._consumed:
                 raise StorageError(
-                    f'post-quantum prekey {prekey.key_id} is already known'
+                    f"post-quantum prekey {prekey.key_id} is already known"
                 )
             self._prekeys[prekey.key_id] = prekey
             self._flush()
 
-    def consume(self, key_id: int) -> 'PQOneTimePreKey':
+    def consume(self, key_id: int) -> "PQOneTimePreKey":
         with self._lock:
             if key_id in self._consumed:
                 raise PQPreKeyAlreadyUsed(
-                    f'post-quantum prekey {key_id} was already used; accepting '
-                    f'it would destroy the forward secrecy the ML-KEM '
-                    f'contribution exists to provide'
+                    f"post-quantum prekey {key_id} was already used; accepting "
+                    f"it would destroy the forward secrecy the ML-KEM "
+                    f"contribution exists to provide"
                 )
             try:
                 prekey = self._prekeys.pop(key_id)
             except KeyError:
-                raise NoSuchPQPreKey(
-                    f'unknown post-quantum prekey {key_id}'
-                ) from None
+                raise NoSuchPQPreKey(f"unknown post-quantum prekey {key_id}") from None
             self._consumed.add(key_id)
             self._reserved.discard(key_id)
             self._flush()
             return prekey
 
-    def peek(self, key_id: int) -> 'PQOneTimePreKey':
+    def peek(self, key_id: int) -> "PQOneTimePreKey":
         with self._lock:
             if key_id in self._consumed:
-                raise NoSuchPQPreKey(
-                    f'post-quantum prekey {key_id} was already used'
-                )
+                raise NoSuchPQPreKey(f"post-quantum prekey {key_id} was already used")
             try:
                 return self._prekeys[key_id]
             except KeyError:
-                raise NoSuchPQPreKey(
-                    f'unknown post-quantum prekey {key_id}'
-                ) from None
+                raise NoSuchPQPreKey(f"unknown post-quantum prekey {key_id}") from None
 
-    def peek_any(self) -> Optional['PQOneTimePreKey']:
+    def peek_any(self) -> Optional["PQOneTimePreKey"]:
         with self._lock:
             for key_id, prekey in self._prekeys.items():
                 if key_id not in self._reserved:
                     return prekey
             return None
 
-    def reserve_next(self) -> Optional['PQOneTimePreKey']:
+    def reserve_next(self) -> Optional["PQOneTimePreKey"]:
         with self._lock:
             for key_id, prekey in self._prekeys.items():
                 if key_id not in self._reserved:
@@ -417,12 +412,10 @@ class PersistentPQPreKeyStore(PQPreKeyStore):
         with self._lock:
             if key_id in self._consumed:
                 raise PQPreKeyAlreadyUsed(
-                    f'post-quantum prekey {key_id} was already used'
+                    f"post-quantum prekey {key_id} was already used"
                 )
             if key_id not in self._prekeys:
-                raise NoSuchPQPreKey(
-                    f'unknown post-quantum prekey {key_id}'
-                )
+                raise NoSuchPQPreKey(f"unknown post-quantum prekey {key_id}")
             self._reserved.discard(key_id)
 
     def reserved_ids(self) -> List[int]:
@@ -441,18 +434,18 @@ class PersistentPQPreKeyStore(PQPreKeyStore):
         with self._lock:
             return key_id in self._consumed
 
-    def replenish(self, low_water_mark: int, target: int = None) -> int:
+    def replenish(self, low_water_mark: int, target: Optional[int] = None) -> int:
         target = target if target is not None else low_water_mark * 2
         if target <= 0:
-            raise PQPreKeyExhausted(
-                'a replenishment target must be positive'
-            )
+            raise PQPreKeyExhausted("a replenishment target must be positive")
         with self._lock:
             added = 0
             while len(self._prekeys) < target:
                 candidate = generate_pq_prekey()
-                if candidate.key_id in self._prekeys or \
-                        candidate.key_id in self._consumed:
+                if (
+                    candidate.key_id in self._prekeys
+                    or candidate.key_id in self._consumed
+                ):
                     continue
                 self._prekeys[candidate.key_id] = candidate
                 added += 1
@@ -490,36 +483,34 @@ class IdentityStore:
         if not raw:
             return
         try:
-            document = json.loads(raw.decode('utf-8'))
+            document = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
-            raise StorageError('identity payload is not valid JSON') from exc
-        if 'identity' in document:
-            self._identity = SigningKey(
-                _unb64(document['identity'], 'identity key')
-            )
-        if 'signed_prekey' in document:
+            raise StorageError("identity payload is not valid JSON") from exc
+        if "identity" in document:
+            self._identity = SigningKey(_unb64(document["identity"], "identity key"))
+        if "signed_prekey" in document:
             self._signed_prekey = PrivateKey(
-                _unb64(document['signed_prekey'], 'signed prekey')
+                _unb64(document["signed_prekey"], "signed prekey")
             )
-        self._signed_prekey_id = int(document.get('signed_prekey_id') or 0)
+        self._signed_prekey_id = int(document.get("signed_prekey_id") or 0)
 
     def _flush(self) -> None:
-        document = {}
+        document: Dict[str, object] = {}
         if self._identity is not None:
-            document['identity'] = _b64(bytes(self._identity))
+            document["identity"] = _b64(bytes(self._identity))
         if self._signed_prekey is not None:
-            document['signed_prekey'] = _b64(bytes(self._signed_prekey))
-            document['signed_prekey_id'] = self._signed_prekey_id
+            document["signed_prekey"] = _b64(bytes(self._signed_prekey))
+            document["signed_prekey_id"] = self._signed_prekey_id
         self._epoch += 1
         self._container.store(
-            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+            json.dumps(document, sort_keys=True).encode("utf-8"), self._epoch
         )
 
     def initialise(self) -> None:
         """Generate a fresh identity key and signed prekey."""
         with self._lock:
             if self._identity is not None:
-                raise StorageError('identity already initialised')
+                raise StorageError("identity already initialised")
             self._identity = SigningKey.generate()
             self._signed_prekey = PrivateKey.generate()
             self._signed_prekey_id = 1
@@ -539,7 +530,7 @@ class IdentityStore:
         """
         with self._lock:
             if self._identity is None:
-                raise StorageError('identity not initialised')
+                raise StorageError("identity not initialised")
             self._signed_prekey = PrivateKey.generate()
             self._signed_prekey_id += 1
             self._flush()
@@ -549,21 +540,21 @@ class IdentityStore:
     def signed_prekey_id(self) -> int:
         with self._lock:
             if self._signed_prekey is None:
-                raise StorageError('identity not initialised')
+                raise StorageError("identity not initialised")
             return self._signed_prekey_id
 
     @property
     def identity_key(self) -> SigningKey:
         with self._lock:
             if self._identity is None:
-                raise StorageError('identity not initialised')
+                raise StorageError("identity not initialised")
             return self._identity
 
     @property
     def signed_prekey_private(self) -> PrivateKey:
         with self._lock:
             if self._signed_prekey is None:
-                raise StorageError('identity not initialised')
+                raise StorageError("identity not initialised")
             return self._signed_prekey
 
     @property
@@ -581,8 +572,9 @@ class SessionStore:
     deleted without touching anything else.
     """
 
-    def __init__(self, directory: str, password: str,
-                 minimum_epoch: Optional[int] = None):
+    def __init__(
+        self, directory: str, password: str, minimum_epoch: Optional[int] = None
+    ):
         self._directory = directory
         self._password = password
         self._minimum_epoch = minimum_epoch
@@ -593,8 +585,9 @@ class SessionStore:
         # The peer id is hashed, not used as a filename, so a hostile name
         # cannot escape the directory or pick a suffix.
         import hashlib
-        digest = hashlib.sha256(peer.encode('utf-8')).hexdigest()[:32]
-        return os.path.join(self._directory, f'{digest}.session')
+
+        digest = hashlib.sha256(peer.encode("utf-8")).hexdigest()[:32]
+        return os.path.join(self._directory, f"{digest}.session")
 
     def save(self, peer: str, state) -> None:
         """Serialise a SessionState. Message keys are not written."""
@@ -606,7 +599,8 @@ class SessionStore:
                     minimum_epoch=self._minimum_epoch
                 )[0]
             import json
-            document = json.dumps(state.serialize(), sort_keys=True).encode('utf-8')
+
+            document = json.dumps(state.serialize(), sort_keys=True).encode("utf-8")
             container = (
                 Container.open(path, self._password)
                 if Container.exists(path)
@@ -622,23 +616,26 @@ class SessionStore:
             KeyError: no session is stored for that peer.
         """
         from ..crypto.double_ratchet import IncompatibleSessionError
+
         path = self._path(peer)
         if not Container.exists(path):
-            raise KeyError(f'no session for {peer!r}')
+            raise KeyError(f"no session for {peer!r}")
         _, raw = Container.open(path, self._password).load(
             minimum_epoch=self._minimum_epoch
         )
         import json
+
         try:
-            document = json.loads(raw.decode('utf-8'))
+            document = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
-            raise StorageError('session payload is not valid JSON') from exc
-        if document.get('version') != expected_protocol_version:
+            raise StorageError("session payload is not valid JSON") from exc
+        if document.get("version") != expected_protocol_version:
             raise IncompatibleSessionError(
                 f'session version {document.get("version")} != '
-                f'{expected_protocol_version}'
+                f"{expected_protocol_version}"
             )
         from ..crypto.double_ratchet import SessionState
+
         return SessionState.deserialize(document)
 
     def delete(self, peer: str) -> None:
@@ -651,8 +648,9 @@ class SessionStore:
         """Session file names. Peer ids are hashed, so these are opaque."""
         with self._lock:
             return sorted(
-                name for name in os.listdir(self._directory)
-                if name.endswith('.session')
+                name
+                for name in os.listdir(self._directory)
+                if name.endswith(".session")
             )
 
 
@@ -666,7 +664,7 @@ def peer_id(identity) -> str:
     :class:`PeerDirectory` indexes, so the two stay in step.
     """
     if not isinstance(identity, VerifyKey):
-        raise StorageError('peer_id expects a VerifyKey')
+        raise StorageError("peer_id expects a VerifyKey")
     return bytes(identity).hex()
 
 
@@ -701,32 +699,31 @@ class PeerDirectory:
         if not raw:
             return
         try:
-            document = json.loads(raw.decode('utf-8'))
+            document = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
-            raise StorageError('peer directory payload is not valid JSON') from exc
-        peers = document.get('peers')
+            raise StorageError("peer directory payload is not valid JSON") from exc
+        peers = document.get("peers")
         if not isinstance(peers, dict):
-            raise StorageError('peer directory payload has no peers object')
+            raise StorageError("peer directory payload has no peers object")
         for identifier, entry in peers.items():
             if not isinstance(identifier, str) or len(identifier) != 64:
-                raise StorageError(f'peer id {identifier!r} is not 32-byte hex')
-            if not isinstance(entry, dict) or \
-                    not isinstance(entry.get('is_initiator'), bool):
-                raise StorageError(
-                    f'peer {identifier} has no usable is_initiator flag'
-                )
-            self._peers[identifier] = entry['is_initiator']
+                raise StorageError(f"peer id {identifier!r} is not 32-byte hex")
+            if not isinstance(entry, dict) or not isinstance(
+                entry.get("is_initiator"), bool
+            ):
+                raise StorageError(f"peer {identifier} has no usable is_initiator flag")
+            self._peers[identifier] = entry["is_initiator"]
 
     def _flush(self) -> None:
         document = {
-            'peers': {
-                identifier: {'is_initiator': is_initiator}
+            "peers": {
+                identifier: {"is_initiator": is_initiator}
                 for identifier, is_initiator in sorted(self._peers.items())
             }
         }
         self._epoch += 1
         self._container.store(
-            json.dumps(document, sort_keys=True).encode('utf-8'), self._epoch
+            json.dumps(document, sort_keys=True).encode("utf-8"), self._epoch
         )
 
     def set(self, identity: VerifyKey, *, is_initiator: bool) -> None:

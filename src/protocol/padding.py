@@ -122,22 +122,21 @@ class PaddingProfile:
     step: int = 8192
 
     def __post_init__(self) -> None:
-        for name in ('floor', 'step'):
+        for name in ("floor", "step"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
-                raise PaddingError(f'{name} must be an int')
+                raise PaddingError(f"{name} must be an int")
             if value < 0:
-                raise PaddingError(f'{name} must not be negative')
+                raise PaddingError(f"{name} must not be negative")
         if self.step < 1:
-            raise PaddingError(f'step must be positive, got {self.step}')
+            raise PaddingError(f"step must be positive, got {self.step}")
         if self.floor > MAX_BUCKET:
             raise PaddingError(
-                f'floor {self.floor} does not fit in a frame (max {MAX_BUCKET})'
+                f"floor {self.floor} does not fit in a frame (max {MAX_BUCKET})"
             )
         if self.step > MAX_FRAME_BYTES:
             raise PaddingError(
-                f'step {self.step} does not fit in a frame '
-                f'(max {MAX_FRAME_BYTES})'
+                f"step {self.step} does not fit in a frame " f"(max {MAX_FRAME_BYTES})"
             )
 
     @property
@@ -153,8 +152,8 @@ class PaddingProfile:
         target = floor + steps * self.step
         if target > MAX_FRAME_BYTES - 2:
             raise PaddingError(
-                f'padded to {target}, which does not fit in a frame '
-                f'(max {MAX_FRAME_BYTES - 2})'
+                f"padded to {target}, which does not fit in a frame "
+                f"(max {MAX_FRAME_BYTES - 2})"
             )
         return target
 
@@ -175,9 +174,9 @@ class PaddingProfile:
         to be discovered.
         """
         if isinstance(length, bool) or not isinstance(length, int):
-            raise PaddingError('length must be an int')
+            raise PaddingError("length must be an int")
         if length < 0:
-            raise PaddingError(f'length must not be negative, got {length}')
+            raise PaddingError(f"length must not be negative, got {length}")
         if not self.enabled:
             return length
         return self._ladder(length, self.floor)
@@ -194,9 +193,9 @@ class PaddingProfile:
         values, whose varints grow as the conversation goes on.
         """
         if isinstance(content, bool) or not isinstance(content, int):
-            raise PaddingError('content must be an int')
+            raise PaddingError("content must be an int")
         if content < 0:
-            raise PaddingError(f'content must not be negative, got {content}')
+            raise PaddingError(f"content must not be negative, got {content}")
         if not self.enabled:
             return content
         return self._ladder(content, self.floor + FRAME_OVERHEAD_MAX)
@@ -207,8 +206,8 @@ class PaddingProfile:
 
     def describe(self) -> str:
         if not self.enabled:
-            return 'disabled'
-        return f'floor {self.floor}, step {self.step}'
+            return "disabled"
+        return f"floor {self.floor}, step {self.step}"
 
 
 #: The profile in force unless a caller asks for another one.
@@ -222,7 +221,7 @@ def _varint(value: int) -> bytes:
     # canonical LEB128, the same one wire.py writes, and test_padding.py pins
     # the two against each other.
     if value < 0:
-        raise PaddingError('varint must not be negative')
+        raise PaddingError("varint must not be negative")
     out = bytearray()
     while True:
         byte = value & 0x7F
@@ -241,7 +240,7 @@ def _read_varint(buf: bytes, offset: int) -> Tuple[int, int]:
     last = 0
     while True:
         if offset >= len(buf):
-            raise PaddingError('padding length runs past the end of the input')
+            raise PaddingError("padding length runs past the end of the input")
         last = buf[offset]
         offset += 1
         result |= (last & 0x7F) << shift
@@ -249,9 +248,9 @@ def _read_varint(buf: bytes, offset: int) -> Tuple[int, int]:
             break
         shift += 7
         if shift > 63:
-            raise PaddingError('padding length is longer than 64 bits')
+            raise PaddingError("padding length is longer than 64 bits")
     if offset - start > 1 and last == 0x00:
-        raise PaddingError('padding length is not a canonical varint')
+        raise PaddingError("padding length is not a canonical varint")
     return result, offset
 
 
@@ -274,7 +273,7 @@ def pad(plaintext: bytes, profile: PaddingProfile = DEFAULT_PROFILE) -> bytes:
         PaddingError: the message does not fit in a frame once padded.
     """
     if not isinstance(plaintext, (bytes, bytearray, memoryview)):
-        raise PaddingError('plaintext must be bytes')
+        raise PaddingError("plaintext must be bytes")
     plaintext = bytes(plaintext)
     if not profile.enabled:
         return plaintext
@@ -282,7 +281,7 @@ def pad(plaintext: bytes, profile: PaddingProfile = DEFAULT_PROFILE) -> bytes:
     target = profile.bucket(len(plaintext) + len(header))
     filler_length = target - len(header) - len(plaintext)
     if filler_length < 0:  # pragma: no cover - bucket() guarantees this
-        raise PaddingError('bucket smaller than the message it holds')
+        raise PaddingError("bucket smaller than the message it holds")
     return header + plaintext + os.urandom(filler_length)
 
 
@@ -297,21 +296,22 @@ def unpad(padded: bytes) -> bytes:
             here: the AEAD rejects it first.
     """
     if not isinstance(padded, (bytes, bytearray, memoryview)):
-        raise PaddingError('padded plaintext must be bytes')
+        raise PaddingError("padded plaintext must be bytes")
     padded = bytes(padded)
     if not padded:
-        raise PaddingError('padded plaintext is empty')
+        raise PaddingError("padded plaintext is empty")
     length, offset = _read_varint(padded, 0)
     if length > len(padded) - offset:
         raise PaddingError(
-            f'padded plaintext declares {length} bytes of message but only '
-            f'{len(padded) - offset} follow the prefix'
+            f"padded plaintext declares {length} bytes of message but only "
+            f"{len(padded) - offset} follow the prefix"
         )
-    return padded[offset:offset + length]
+    return padded[offset : offset + length]
 
 
-def fits(plaintext_length: int,
-         profile: PaddingProfile = DEFAULT_PROFILE) -> Optional[str]:
+def fits(
+    plaintext_length: int, profile: PaddingProfile = DEFAULT_PROFILE
+) -> Optional[str]:
     """
     Why a message of this length cannot be sent, or None if it can.
 

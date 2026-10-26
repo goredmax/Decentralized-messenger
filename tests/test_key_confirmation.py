@@ -28,7 +28,9 @@ from src.crypto.x3dh import (
 
 
 from src.crypto.pq import stocked_pq_store
-def build(prekey=True, associated_data=b'', prekey_id=1):
+
+
+def build(prekey=True, associated_data=b"", prekey_id=1):
     """Build a responder and an unconfirmed initiator session."""
     x3dh = X3DH()
     bob_private, _ = x3dh.generate_identity_keys()
@@ -101,7 +103,7 @@ class TestConfirmationRequired:
 
 
 class TestConfirmationRejection:
-    def _pair(self, associated_data=b''):
+    def _pair(self, associated_data=b""):
         _, session, init, responder = build(associated_data=associated_data)
         return session, responder.respond(init, associated_data)
 
@@ -109,7 +111,7 @@ class TestConfirmationRejection:
         session, _ = self._pair()
         forged = KeyConfirmation(
             ephemeral_key=PrivateKey.generate().public_key,
-            mac=b'\x00' * 32,
+            mac=b"\x00" * 32,
         )
         with pytest.raises(KeyConfirmationFailed):
             session.verify_key_confirmation(forged)
@@ -139,10 +141,10 @@ class TestConfirmationRejection:
             session.verify_key_confirmation(swapped)
 
     def test_associated_data_mismatch_rejected(self):
-        session, responder_session = self._pair(associated_data=b'ctx-a')
+        session, responder_session = self._pair(associated_data=b"ctx-a")
         confirmation = responder_session.make_key_confirmation()
         # Same transcript, but the initiator believes the context differs.
-        session._associated_data = b'ctx-b'
+        session._associated_data = b"ctx-b"
         with pytest.raises(KeyConfirmationFailed):
             session.verify_key_confirmation(confirmation)
 
@@ -155,18 +157,18 @@ class TestConfirmationRejection:
     def test_wrong_type_rejected(self):
         session, _ = self._pair()
         with pytest.raises(InvalidHandshakeError):
-            session.verify_key_confirmation(b'not-a-confirmation')
+            session.verify_key_confirmation(b"not-a-confirmation")
 
     def test_short_mac_rejected_at_construction(self):
         with pytest.raises(KeyConfirmationFailed):
             KeyConfirmation(
                 ephemeral_key=PrivateKey.generate().public_key,
-                mac=b'\x00' * 16,
+                mac=b"\x00" * 16,
             )
 
     def test_short_ephemeral_key_rejected_at_construction(self):
         with pytest.raises(InvalidHandshakeError):
-            KeyConfirmation(ephemeral_key=b'\x00' * 16, mac=b'\x00' * 32)
+            KeyConfirmation(ephemeral_key=b"\x00" * 16, mac=b"\x00" * 32)
 
 
 class TestDirectionalRules:
@@ -186,14 +188,14 @@ class TestDirectionalRules:
 
 class TestMacDerivation:
     def test_mac_key_depends_on_root_key(self):
-        assert confirmation_mac_key(b'\x00' * 32) != confirmation_mac_key(b'\x01' * 32)
+        assert confirmation_mac_key(b"\x00" * 32) != confirmation_mac_key(b"\x01" * 32)
 
     def test_mac_key_is_deterministic(self):
-        assert confirmation_mac_key(b'\x42' * 32) == confirmation_mac_key(b'\x42' * 32)
+        assert confirmation_mac_key(b"\x42" * 32) == confirmation_mac_key(b"\x42" * 32)
 
     def test_mac_key_requires_32_bytes(self):
         with pytest.raises(InvalidHandshakeError):
-            confirmation_mac_key(b'\x00' * 16)
+            confirmation_mac_key(b"\x00" * 16)
 
     def test_mac_binds_every_transcript_field(self):
         """
@@ -202,7 +204,7 @@ class TestMacDerivation:
         Without this a confirmation could be reused against a different identity
         key, a different ephemeral key, or different associated data.
         """
-        root = b'\x07' * 32
+        root = b"\x07" * 32
         _, alice_identity = X3DH.generate_identity_keys()
         _, bob_identity = X3DH.generate_identity_keys()
         alice_ephemeral = PrivateKey.generate().public_key
@@ -210,7 +212,7 @@ class TestMacDerivation:
 
         def mac(**overrides):
             kwargs = dict(
-                associated_data=b'ad',
+                associated_data=b"ad",
                 alice_identity=alice_identity,
                 alice_ephemeral=alice_ephemeral,
                 bob_identity=bob_identity,
@@ -220,7 +222,7 @@ class TestMacDerivation:
             return confirmation_mac(root, **kwargs)
 
         baseline = mac()
-        assert baseline != mac(associated_data=b'other')
+        assert baseline != mac(associated_data=b"other")
         assert baseline != mac(alice_identity=X3DH.generate_identity_keys()[1])
         assert baseline != mac(alice_ephemeral=PrivateKey.generate().public_key)
         assert baseline != mac(bob_identity=X3DH.generate_identity_keys()[1])
@@ -230,14 +232,15 @@ class TestMacDerivation:
         _, alice_identity = X3DH.generate_identity_keys()
         _, bob_identity = X3DH.generate_identity_keys()
         kwargs = dict(
-            associated_data=b'',
+            associated_data=b"",
             alice_identity=alice_identity,
             alice_ephemeral=PrivateKey.generate().public_key,
             bob_identity=bob_identity,
             bob_ephemeral=PrivateKey.generate().public_key,
         )
-        assert confirmation_mac(b'\x01' * 32, **kwargs) != \
-            confirmation_mac(b'\x02' * 32, **kwargs)
+        assert confirmation_mac(b"\x01" * 32, **kwargs) != confirmation_mac(
+            b"\x02" * 32, **kwargs
+        )
 
 
 class TestPrekeyStillSingleUse:

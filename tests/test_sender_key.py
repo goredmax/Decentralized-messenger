@@ -29,7 +29,7 @@ from src.protocol.sender_key import (
     UntrustedSenderKey,
 )
 
-GROUP = 'test-group'
+GROUP = "test-group"
 
 
 def member(name=None):
@@ -62,24 +62,25 @@ class TestSenderKeyId:
 
     def test_different_groups_differ(self):
         key = SigningKey.generate()
-        assert SenderKeyId('a', key.verify_key) != SenderKeyId('b', key.verify_key)
+        assert SenderKeyId("a", key.verify_key) != SenderKeyId("b", key.verify_key)
 
     def test_different_senders_differ(self):
-        assert (SenderKeyId('a', member().verify_key)
-                != SenderKeyId('a', member().verify_key))
+        assert SenderKeyId("a", member().verify_key) != SenderKeyId(
+            "a", member().verify_key
+        )
 
     def test_rejects_empty_group(self):
         with pytest.raises(SenderKeyError):
-            SenderKeyId('', member().verify_key)
+            SenderKeyId("", member().verify_key)
 
     def test_rejects_non_verify_key(self):
         with pytest.raises(SenderKeyError):
-            SenderKeyId(GROUP, b'not a key')
+            SenderKeyId(GROUP, b"not a key")
 
     def test_usable_as_a_dict_key(self):
         key = member().verify_key
-        mapping = {SenderKeyId(GROUP, key): 'value'}
-        assert mapping[SenderKeyId(GROUP, key)] == 'value'
+        mapping = {SenderKeyId(GROUP, key): "value"}
+        assert mapping[SenderKeyId(GROUP, key)] == "value"
 
 
 class TestDistribution:
@@ -136,9 +137,7 @@ class TestDistribution:
             key_id=distribution.key_id,
             iteration=distribution.iteration,
             chain_key=distribution.chain_key,
-            signature=impostor.sign(
-                distribution._signed_bytes()
-            ).signature,
+            signature=impostor.sign(distribution._signed_bytes()).signature,
             chain_id=distribution.chain_id,
         )
         with pytest.raises(SenderKeyError):
@@ -151,7 +150,7 @@ class TestDistribution:
             key_id=SenderKeyId(GROUP, identity.verify_key),
             iteration=0,
             chain_key=PrivateKey.generate().public_key.__bytes__(),
-            signature=b'\x00' * 64,
+            signature=b"\x00" * 64,
             chain_id=PrivateKey.generate().public_key.__bytes__(),
         )
         with pytest.raises(SenderKeyError):
@@ -163,9 +162,9 @@ class TestDistribution:
             SenderKeyDistributionMessage(
                 key_id=SenderKeyId(GROUP, identity.verify_key),
                 iteration=MAX_ITERATION + 1,
-                chain_key=b'\x00' * 32,
-                signature=b'\x00' * 64,
-                chain_id=b'\x00' * 32,
+                chain_key=b"\x00" * 32,
+                signature=b"\x00" * 64,
+                chain_id=b"\x00" * 32,
             )
 
     def test_rejects_short_chain_key(self):
@@ -174,9 +173,9 @@ class TestDistribution:
             SenderKeyDistributionMessage(
                 key_id=SenderKeyId(GROUP, identity.verify_key),
                 iteration=0,
-                chain_key=b'\x00' * 16,
-                signature=b'\x00' * 64,
-                chain_id=b'\x00' * 32,
+                chain_key=b"\x00" * 16,
+                signature=b"\x00" * 64,
+                chain_id=b"\x00" * 32,
             )
 
     def test_rejects_missing_chain_id(self):
@@ -185,8 +184,8 @@ class TestDistribution:
             SenderKeyDistributionMessage(
                 key_id=SenderKeyId(GROUP, identity.verify_key),
                 iteration=0,
-                chain_key=b'\x00' * 32,
-                signature=b'\x00' * 64,
+                chain_key=b"\x00" * 32,
+                signature=b"\x00" * 64,
             )
 
 
@@ -198,30 +197,30 @@ class TestGroupMessaging:
         second = SessionCipher(carol)
 
         join(sender, GROUP, first, second)
-        message, _ = sender.encrypt(b'hello everyone', GROUP)
-        assert first.decrypt(message) == b'hello everyone'
-        assert second.decrypt(message) == b'hello everyone'
+        message, _ = sender.encrypt(b"hello everyone", GROUP)
+        assert first.decrypt(message) == b"hello everyone"
+        assert second.decrypt(message) == b"hello everyone"
 
     def test_a_long_conversation(self):
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
         join(sender, GROUP, receiver)
         for index in range(20):
-            text = f'message {index}'.encode()
+            text = f"message {index}".encode()
             message, _ = sender.encrypt(text, GROUP)
             assert receiver.decrypt(message) == text
 
     def test_separate_groups_are_separate(self):
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
-        join(sender, 'alpha', receiver)
-        message, _ = sender.encrypt(b'for alpha', 'alpha')
+        join(sender, "alpha", receiver)
+        message, _ = sender.encrypt(b"for alpha", "alpha")
         # The receiver holds no session for beta, and alpha's message is
         # unrelated to it.
         with pytest.raises(SenderKeyError):
             receiver.decrypt(
                 SenderKeyMessage(
-                    key_id=SenderKeyId('beta', receiver.builder.sessions()[0].sender),
+                    key_id=SenderKeyId("beta", receiver.builder.sessions()[0].sender),
                     iteration=0,
                     ciphertext=message.ciphertext,
                 )
@@ -235,15 +234,15 @@ class TestGroupMessaging:
         join(first_cipher, GROUP, listener)
         join(second_cipher, GROUP, listener)
 
-        from_alice, _ = first_cipher.encrypt(b'from alice', GROUP)
-        from_bob, _ = second_cipher.encrypt(b'from bob', GROUP)
-        assert listener.decrypt(from_alice) == b'from alice'
-        assert listener.decrypt(from_bob) == b'from bob'
+        from_alice, _ = first_cipher.encrypt(b"from alice", GROUP)
+        from_bob, _ = second_cipher.encrypt(b"from bob", GROUP)
+        assert listener.decrypt(from_alice) == b"from alice"
+        assert listener.decrypt(from_bob) == b"from bob"
 
     def test_receiver_needs_a_distribution_first(self):
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
-        message, _ = sender.encrypt(b'too early', GROUP)
+        message, _ = sender.encrypt(b"too early", GROUP)
         with pytest.raises(UntrustedSenderKey):
             receiver.decrypt(message)
 
@@ -251,7 +250,7 @@ class TestGroupMessaging:
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
         join(sender, GROUP, receiver)
-        message, _ = sender.encrypt(b'secret', GROUP)
+        message, _ = sender.encrypt(b"secret", GROUP)
         altered = SenderKeyMessage(
             key_id=message.key_id,
             iteration=message.iteration,
@@ -264,10 +263,10 @@ class TestGroupMessaging:
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
         join(sender, GROUP, receiver)
-        message, _ = sender.encrypt(b'secret', GROUP)
+        message, _ = sender.encrypt(b"secret", GROUP)
         # Same key material, different group id in the header.
         forged = SenderKeyMessage(
-            key_id=SenderKeyId('other-group', message.key_id.sender),
+            key_id=SenderKeyId("other-group", message.key_id.sender),
             iteration=message.iteration,
             ciphertext=message.ciphertext,
         )
@@ -287,7 +286,7 @@ class TestLateJoiner:
         early = SessionCipher(member())
         join(sender, GROUP, early)
 
-        history = [sender.encrypt(f'old {i}'.encode(), GROUP)[0] for i in range(3)]
+        history = [sender.encrypt(f"old {i}".encode(), GROUP)[0] for i in range(3)]
         early_seen = [early.decrypt(message) for message in history]
 
         # A newcomer receives the current distribution only.
@@ -303,12 +302,12 @@ class TestLateJoiner:
         sender = SessionCipher(member())
         early = SessionCipher(member())
         join(sender, GROUP, early)
-        sender.encrypt(b'before', GROUP)
+        sender.encrypt(b"before", GROUP)
 
         latecomer = SessionCipher(member())
         latecomer.process_distribution(sender.distribution_for(GROUP))
-        message, _ = sender.encrypt(b'after', GROUP)
-        assert latecomer.decrypt(message) == b'after'
+        message, _ = sender.encrypt(b"after", GROUP)
+        assert latecomer.decrypt(message) == b"after"
 
 
 class TestRotation:
@@ -321,8 +320,8 @@ class TestRotation:
         staying = SessionCipher(member())
         leaving = SessionCipher(member())
         join(sender, GROUP, staying, leaving)
-        old, _ = sender.encrypt(b'before removal', GROUP)
-        assert leaving.decrypt(old) == b'before removal'
+        old, _ = sender.encrypt(b"before removal", GROUP)
+        assert leaving.decrypt(old) == b"before removal"
 
         # The sender rotates; the staying member confirms the new chain.
         rotated = sender.rotate_after_removal(GROUP)
@@ -331,8 +330,8 @@ class TestRotation:
         staying.builder.trust(rotated)
         sender.remove_member(GROUP, leaving.builder.sessions()[0].sender)
 
-        new, _ = sender.encrypt(b'after removal', GROUP)
-        assert staying.decrypt(new) == b'after removal'
+        new, _ = sender.encrypt(b"after removal", GROUP)
+        assert staying.decrypt(new) == b"after removal"
         with pytest.raises(SenderKeyError):
             leaving.decrypt(new)
 
@@ -359,7 +358,7 @@ class TestRotation:
     def test_rotation_resets_iteration(self):
         cipher = SessionCipher(member())
         for _ in range(5):
-            cipher.encrypt(b'x', GROUP)
+            cipher.encrypt(b"x", GROUP)
         rotated = cipher.rotate_after_removal(GROUP)
         assert rotated.iteration == 0
 
@@ -441,17 +440,17 @@ class TestTrustOnFirstUse:
         assert untrusted is True
 
         receiver.builder.trust(rotated)
-        message, _ = second.encrypt(b'after rotation', GROUP)
-        assert receiver.decrypt(message) == b'after rotation'
+        message, _ = second.encrypt(b"after rotation", GROUP)
+        assert receiver.decrypt(message) == b"after rotation"
 
     def test_trust_requires_a_valid_signature(self):
         receiver = SessionCipher(member())
         forged = SenderKeyDistributionMessage(
             key_id=SenderKeyId(GROUP, member().verify_key),
             iteration=0,
-            chain_key=b'\x00' * 32,
-            signature=b'\x00' * 64,
-            chain_id=b'\x00' * 32,
+            chain_key=b"\x00" * 32,
+            signature=b"\x00" * 64,
+            chain_id=b"\x00" * 32,
         )
         with pytest.raises(SenderKeyError):
             receiver.builder.trust(forged)
@@ -461,8 +460,9 @@ class TestTrustOnFirstUse:
         receiver = SessionCipher(member())
         distribution = SessionCipher(identity).distribution_for(GROUP)
         receiver.process_distribution(distribution)
-        assert receiver.builder.trusted_chains(distribution.key_id) == \
-            [distribution.chain_id]
+        assert receiver.builder.trusted_chains(distribution.key_id) == [
+            distribution.chain_id
+        ]
 
     def test_a_new_group_from_a_known_sender_is_adopted(self):
         """
@@ -475,8 +475,8 @@ class TestTrustOnFirstUse:
         identity = member()
         sender = SessionCipher(identity)
         receiver = SessionCipher(member())
-        receiver.process_distribution(sender.distribution_for('alpha'))
-        _, untrusted = receiver.process_distribution(sender.distribution_for('beta'))
+        receiver.process_distribution(sender.distribution_for("alpha"))
+        _, untrusted = receiver.process_distribution(sender.distribution_for("beta"))
         assert untrusted is False
         assert len(receiver.builder.sessions()) == 2
 
@@ -485,9 +485,9 @@ class TestTrustOnFirstUse:
         unsigned = SenderKeyDistributionMessage(
             key_id=SenderKeyId(GROUP, member().verify_key),
             iteration=0,
-            chain_key=b'\x00' * 32,
-            signature=b'\x00' * 64,
-            chain_id=b'\x00' * 32,
+            chain_key=b"\x00" * 32,
+            signature=b"\x00" * 64,
+            chain_id=b"\x00" * 32,
         )
         with pytest.raises(SenderKeyError):
             receiver.process_distribution(unsigned)
@@ -507,8 +507,8 @@ class TestReplayAndGaps:
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
         join(sender, GROUP, receiver)
-        message, _ = sender.encrypt(b'once', GROUP)
-        assert receiver.decrypt(message) == b'once'
+        message, _ = sender.encrypt(b"once", GROUP)
+        assert receiver.decrypt(message) == b"once"
         with pytest.raises(SenderKeyReplay):
             receiver.decrypt(message)
 
@@ -527,9 +527,9 @@ class TestReplayAndGaps:
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
         join(sender, GROUP, receiver)
-        messages = [sender.encrypt(f'm{i}'.encode(), GROUP)[0] for i in range(3)]
+        messages = [sender.encrypt(f"m{i}".encode(), GROUP)[0] for i in range(3)]
         # Consume one, then ask for it again.
-        assert receiver.decrypt(messages[0]) == b'm0'
+        assert receiver.decrypt(messages[0]) == b"m0"
         with pytest.raises(SenderKeyReplay):
             receiver.decrypt(messages[0])
         # An iteration below the session's current position is refused too, so a
@@ -541,9 +541,9 @@ class TestReplayAndGaps:
         sender = SessionCipher(member())
         receiver = SessionCipher(member())
         join(sender, GROUP, receiver)
-        messages = [sender.encrypt(f'm{i}'.encode(), GROUP)[0] for i in range(3)]
+        messages = [sender.encrypt(f"m{i}".encode(), GROUP)[0] for i in range(3)]
         for index in range(3):
-            assert receiver.decrypt(messages[index]) == f'm{index}'.encode()
+            assert receiver.decrypt(messages[index]) == f"m{index}".encode()
 
     def test_gap_beyond_the_budget_is_refused(self):
         session = self._session_at(0)
@@ -568,7 +568,7 @@ class TestReplayAndGaps:
             SenderKeyMessage(
                 key_id=SenderKeyId(GROUP, member().verify_key),
                 iteration=0,
-                ciphertext=b'\x00' * 8,
+                ciphertext=b"\x00" * 8,
             )
 
 
@@ -580,7 +580,7 @@ class TestSessionBuilder:
             key_id=SenderKeyId(GROUP, identity.verify_key),
             iteration=0,
             chain_key=PrivateKey.generate().public_key.__bytes__(),
-            signature=b'\x00' * 64,
+            signature=b"\x00" * 64,
             chain_id=PrivateKey.generate().public_key.__bytes__(),
         )
         builder.process(distribution)
@@ -601,13 +601,16 @@ class TestSessionBuilder:
             key_id=key_id,
             iteration=0,
             chain_key=chain_key,
-            signature=b'\x00' * 64,
+            signature=b"\x00" * 64,
             chain_id=chain_id,
         )
         builder.process(base)
         ahead = SenderKeyDistributionMessage(
-            key_id=key_id, iteration=5, chain_key=chain_key,
-            signature=b'\x00' * 64, chain_id=chain_id,
+            key_id=key_id,
+            iteration=5,
+            chain_key=chain_key,
+            signature=b"\x00" * 64,
+            chain_id=chain_id,
         )
         builder.process(ahead)
         assert builder.get_session(key_id).iteration == 5

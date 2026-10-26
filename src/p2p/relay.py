@@ -101,7 +101,7 @@ class Transport(abc.ABC):
 class Endpoint(Transport):
     """One side of a relay link, from one participant's point of view."""
 
-    def __init__(self, relay: 'Relay', name: str, peer: str, max_frame_bytes: int):
+    def __init__(self, relay: "Relay", name: str, peer: str, max_frame_bytes: int):
         self._relay = relay
         self._name = name
         self._peer = peer
@@ -119,14 +119,14 @@ class Endpoint(Transport):
 
     def send(self, frame: bytes) -> None:
         if not isinstance(frame, (bytes, bytearray, memoryview)):
-            raise TransportError('a frame must be bytes')
+            raise TransportError("a frame must be bytes")
         frame = bytes(frame)
         if len(frame) > self._max_frame_bytes:
             # Checked before the frame is queued, so an oversized frame costs
             # nothing beyond the caller's own memory for it.
             raise FrameTooLarge(
-                f'frame of {len(frame)} bytes exceeds the {self._max_frame_bytes} '
-                f'byte limit'
+                f"frame of {len(frame)} bytes exceeds the {self._max_frame_bytes} "
+                f"byte limit"
             )
         self._relay._deliver(self._name, self._peer, frame)
 
@@ -136,14 +136,14 @@ class Endpoint(Transport):
     def close(self) -> None:
         self._relay._close(self._name)
 
-    def __enter__(self) -> 'Endpoint':
+    def __enter__(self) -> "Endpoint":
         return self
 
     def __exit__(self, *exc_info) -> None:
         self.close()
 
     def __repr__(self) -> str:
-        return f'<Endpoint {self._name} -> {self._peer}>'
+        return f"<Endpoint {self._name} -> {self._peer}>"
 
 
 class Relay:
@@ -162,15 +162,18 @@ class Relay:
     part the protocol is responsible for.
     """
 
-    def __init__(self, queue_size: int = DEFAULT_QUEUE_SIZE,
-                 max_frame_bytes: int = MAX_FRAME_BYTES):
+    def __init__(
+        self,
+        queue_size: int = DEFAULT_QUEUE_SIZE,
+        max_frame_bytes: int = MAX_FRAME_BYTES,
+    ):
         if queue_size < 1:
-            raise ValueError('queue_size must be at least 1')
+            raise ValueError("queue_size must be at least 1")
         if max_frame_bytes < 1:
-            raise ValueError('max_frame_bytes must be at least 1')
+            raise ValueError("max_frame_bytes must be at least 1")
         self._queue_size = queue_size
         self._max_frame_bytes = max_frame_bytes
-        self._queues: Dict[str, 'queue.Queue'] = {}
+        self._queues: Dict[str, "queue.Queue"] = {}
         self._endpoints: Dict[str, Endpoint] = {}
         self._links: Dict[str, str] = {}
         self._observed: List[Tuple[str, int]] = []
@@ -198,11 +201,11 @@ class Relay:
                 read its own inbound queue, which no real network allows.
         """
         if first == second:
-            raise TransportError('an endpoint cannot be linked to itself')
+            raise TransportError("an endpoint cannot be linked to itself")
         with self._lock:
             for name in (first, second):
                 if name in self._endpoints:
-                    raise TransportError(f'{name!r} is already linked')
+                    raise TransportError(f"{name!r} is already linked")
             endpoints = tuple(
                 Endpoint(self, name, peer, self._max_frame_bytes)
                 for name, peer in ((first, second), (second, first))
@@ -213,7 +216,7 @@ class Relay:
                 self._queues[name] = queue.Queue(self._queue_size)
             self._links[first] = second
             self._links[second] = first
-        return endpoints
+        return endpoints[0], endpoints[1]
 
     def participants(self) -> List[str]:
         """Every linked name, in the order it was linked."""
@@ -243,7 +246,8 @@ class Relay:
         """Frame lengths, optionally for one sender only."""
         with self._lock:
             return [
-                length for name, length in self._observed
+                length
+                for name, length in self._observed
                 if sender is None or name == sender
             ]
 
@@ -268,32 +272,32 @@ class Relay:
         # nothing and keeps the observation strictly ordered.
         with self._lock:
             if sender in self._closed or recipient in self._closed:
-                raise Closed('the transport is closed')
+                raise Closed("the transport is closed")
             target = self._queues.get(recipient)
             if target is None:
-                raise Closed(f'{recipient!r} has no link')
+                raise Closed(f"{recipient!r} has no link")
             try:
                 target.put_nowait(frame)
             except queue.Full:
                 raise QueueFull(
-                    f'{recipient!r} is not reading; {self._queue_size} frames '
-                    f'are already queued'
+                    f"{recipient!r} is not reading; {self._queue_size} frames "
+                    f"are already queued"
                 ) from None
             self._observed.append((sender, len(frame)))
 
     def _collect(self, name: str, timeout: Optional[float]) -> bytes:
         with self._lock:
             if name in self._closed:
-                raise Closed('the transport is closed')
+                raise Closed("the transport is closed")
             source = self._queues.get(name)
         if source is None:
-            raise Closed(f'{name!r} has no link')
+            raise Closed(f"{name!r} has no link")
         try:
             return source.get(timeout=timeout)
         except queue.Empty:
             raise NoFrame(
                 f'no frame from {self._links.get(name, "?")!r} within '
-                f'{timeout} seconds'
+                f"{timeout} seconds"
             ) from None
 
     def _close(self, name: str) -> None:

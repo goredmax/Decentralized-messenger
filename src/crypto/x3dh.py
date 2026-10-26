@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Tuple
 
 import nacl.bindings
+from cryptography.hazmat.primitives.asymmetric.mlkem import MLKEM768PublicKey
 from nacl.exceptions import BadSignatureError, CryptoError
 from nacl.public import PrivateKey, PublicKey
 from nacl.signing import SigningKey, VerifyKey
@@ -63,7 +64,7 @@ INIT_TRANSCRIPT_LABEL = b"X3DH-init-v1"
 DEFAULT_CONTEXT = b"DecentralizedMessenger-X3DH-v1"
 
 # X3DH section 4: for 256-bit curves, F is 0xFF repeated 32 times.
-X25519_F = b'\xff' * 32
+X25519_F = b"\xff" * 32
 
 # Key confirmation, X3DH section 4.3. The MAC is keyed by a value derived from
 # the shared root key, so only a peer that derived the same root key can produce
@@ -135,7 +136,7 @@ class KeyConfirmationFailed(X3DHError):
 
 def _u32(value: int) -> bytes:
     """Big-endian 32-bit length prefix, for transcript canonicalisation."""
-    return value.to_bytes(4, 'big')
+    return value.to_bytes(4, "big")
 
 
 def length_prefixed(*chunks: Optional[bytes]) -> bytes:
@@ -187,10 +188,8 @@ def _init_transcript(
     honest parties do not share it. Covering it costs 1088 bytes of hashing per
     handshake and removes the cheapest possible post-quantum downgrade.
     """
-    opk = (None if one_time_prekey_id is None
-           else one_time_prekey_id.to_bytes(8, 'big'))
-    pq_id = (None if pq_prekey_id is None
-             else pq_prekey_id.to_bytes(8, 'big'))
+    opk = None if one_time_prekey_id is None else one_time_prekey_id.to_bytes(8, "big")
+    pq_id = None if pq_prekey_id is None else pq_prekey_id.to_bytes(8, "big")
     return length_prefixed(
         INIT_TRANSCRIPT_LABEL,
         bytes(identity_key),
@@ -232,33 +231,36 @@ class PreKeyBundle:
     #: "not tracked", which leaves the signature as the only check.
     signed_prekey_id: int = 0
     #: One-time ML-KEM-768 encapsulation key, and the id it is published under.
-    pq_prekey: Optional[object] = None
+    pq_prekey: Optional[MLKEM768PublicKey] = None
     pq_prekey_id: Optional[int] = None
 
     def __post_init__(self) -> None:
         if len(bytes(self.identity_key)) != _DH_LEN:
-            raise InvalidHandshakeError('identity key must be 32 bytes')
+            raise InvalidHandshakeError("identity key must be 32 bytes")
         if len(bytes(self.signed_prekey)) != _DH_LEN:
-            raise InvalidHandshakeError('signed prekey must be 32 bytes')
+            raise InvalidHandshakeError("signed prekey must be 32 bytes")
         if len(self.signed_prekey_signature) != _SIG_LEN:
             raise InvalidSignatureError(
-                f'signed prekey signature must be {_SIG_LEN} bytes'
+                f"signed prekey signature must be {_SIG_LEN} bytes"
             )
         if (self.one_time_prekey is None) != (self.one_time_prekey_id is None):
             raise InvalidHandshakeError(
-                'one_time_prekey and one_time_prekey_id must both be set or unset'
+                "one_time_prekey and one_time_prekey_id must both be set or unset"
             )
-        if self.one_time_prekey is not None and len(bytes(self.one_time_prekey)) != _DH_LEN:
-            raise InvalidHandshakeError('one-time prekey must be 32 bytes')
-        if isinstance(self.signed_prekey_id, bool) or \
-                not isinstance(self.signed_prekey_id, int) or \
-                self.signed_prekey_id < 0:
-            raise InvalidHandshakeError(
-                'signed_prekey_id must be a non-negative int'
-            )
+        if (
+            self.one_time_prekey is not None
+            and len(bytes(self.one_time_prekey)) != _DH_LEN
+        ):
+            raise InvalidHandshakeError("one-time prekey must be 32 bytes")
+        if (
+            isinstance(self.signed_prekey_id, bool)
+            or not isinstance(self.signed_prekey_id, int)
+            or self.signed_prekey_id < 0
+        ):
+            raise InvalidHandshakeError("signed_prekey_id must be a non-negative int")
         if (self.pq_prekey is None) != (self.pq_prekey_id is None):
             raise InvalidHandshakeError(
-                'pq_prekey and pq_prekey_id must both be set or unset'
+                "pq_prekey and pq_prekey_id must both be set or unset"
             )
         if self.pq_prekey is not None:
             # Checked through the pq module's loader rather than by isinstance
@@ -297,34 +299,34 @@ class HandshakeInit:
 
     def __post_init__(self) -> None:
         for name, value in (
-            ('identity_key', self.identity_key),
-            ('identity_key_x25519', self.identity_key_x25519),
-            ('ephemeral_key', self.ephemeral_key),
+            ("identity_key", self.identity_key),
+            ("identity_key_x25519", self.identity_key_x25519),
+            ("ephemeral_key", self.ephemeral_key),
         ):
             if len(bytes(value)) != _DH_LEN:
-                raise InvalidHandshakeError(f'{name} must be {_DH_LEN} bytes')
+                raise InvalidHandshakeError(f"{name} must be {_DH_LEN} bytes")
         if len(self.signature) != _SIG_LEN:
-            raise InvalidSignatureError(
-                f'handshake signature must be {_SIG_LEN} bytes'
-            )
+            raise InvalidSignatureError(f"handshake signature must be {_SIG_LEN} bytes")
         if self.one_time_prekey_id is not None and not (
-            0 <= self.one_time_prekey_id < 2 ** 64
+            0 <= self.one_time_prekey_id < 2**64
         ):
-            raise InvalidHandshakeError('one_time_prekey_id out of range')
+            raise InvalidHandshakeError("one_time_prekey_id out of range")
         if (self.pq_ciphertext is None) != (self.pq_prekey_id is None):
             raise InvalidHandshakeError(
-                'pq_ciphertext and pq_prekey_id must both be set or unset'
+                "pq_ciphertext and pq_prekey_id must both be set or unset"
             )
-        if self.pq_ciphertext is not None and \
-                len(self.pq_ciphertext) != PQ_CIPHERTEXT_LEN:
+        if (
+            self.pq_ciphertext is not None
+            and len(self.pq_ciphertext) != PQ_CIPHERTEXT_LEN
+        ):
             raise InvalidHandshakeError(
-                f'pq_ciphertext must be {PQ_CIPHERTEXT_LEN} bytes, got '
-                f'{len(self.pq_ciphertext)}'
+                f"pq_ciphertext must be {PQ_CIPHERTEXT_LEN} bytes, got "
+                f"{len(self.pq_ciphertext)}"
             )
-        if self.pq_prekey_id is not None and not (0 <= self.pq_prekey_id < 2 ** 64):
-            raise InvalidHandshakeError('pq_prekey_id out of range')
+        if self.pq_prekey_id is not None and not (0 <= self.pq_prekey_id < 2**64):
+            raise InvalidHandshakeError("pq_prekey_id out of range")
 
-    def transcript(self, associated_data: bytes = b'') -> bytes:
+    def transcript(self, associated_data: bytes = b"") -> bytes:
         """Canonical, length-prefixed byte string covered by ``signature``."""
         return _init_transcript(
             self.identity_key,
@@ -336,7 +338,7 @@ class HandshakeInit:
             associated_data,
         )
 
-    def verify(self, associated_data: bytes = b'') -> None:
+    def verify(self, associated_data: bytes = b"") -> None:
         """
         Verify the initiator's signature.
 
@@ -344,14 +346,12 @@ class HandshakeInit:
             InvalidSignatureError: the signature does not match the transcript.
         """
         if len(self.signature) != _SIG_LEN:
-            raise InvalidSignatureError(
-                f'handshake signature must be {_SIG_LEN} bytes'
-            )
+            raise InvalidSignatureError(f"handshake signature must be {_SIG_LEN} bytes")
         try:
             self.identity_key.verify(self.transcript(associated_data), self.signature)
         except BadSignatureError as exc:
             raise InvalidSignatureError(
-                'initiator handshake signature verification failed'
+                "initiator handshake signature verification failed"
             ) from exc
 
 
@@ -375,20 +375,20 @@ class DhPart:
     def __post_init__(self) -> None:
         if len(self.value) != _DH_LEN:
             raise InvalidHandshakeError(
-                f'DH output must be {_DH_LEN} bytes, got {len(self.value)}'
+                f"DH output must be {_DH_LEN} bytes, got {len(self.value)}"
             )
         if not isinstance(self.label, (bytes, bytearray)):
-            raise InvalidHandshakeError('a DH part label must be bytes')
+            raise InvalidHandshakeError("a DH part label must be bytes")
 
 
 #: Labels for the contributions, in the order they are mixed in. Fixed strings so
 #: that the set of combinations a handshake can produce is a closed list rather
 #: than whatever a caller passes.
-LABEL_IK_SPK = b'DH1'
-LABEL_EK_IK = b'DH2'
-LABEL_EK_SPK = b'DH3'
-LABEL_EK_OPK = b'DH4'
-LABEL_KEM = b'PQ'
+LABEL_IK_SPK = b"DH1"
+LABEL_EK_IK = b"DH2"
+LABEL_EK_SPK = b"DH3"
+LABEL_EK_OPK = b"DH4"
+LABEL_KEM = b"PQ"
 
 
 @dataclass
@@ -426,8 +426,8 @@ class X3DHState:
         :meth:`master_key`. The labels are included, so this is not the same
         buffer for two different prekey arrangements.
         """
-        return b''.join(
-            len(part.label).to_bytes(4, 'big') + part.label + part.value
+        return b"".join(
+            len(part.label).to_bytes(4, "big") + part.label + part.value
             for part in self.dh_parts
         )
 
@@ -447,12 +447,10 @@ class KeyConfirmation:
     def __post_init__(self) -> None:
         if len(bytes(self.ephemeral_key)) != _DH_LEN:
             raise InvalidHandshakeError(
-                f'confirmation ephemeral key must be {_DH_LEN} bytes'
+                f"confirmation ephemeral key must be {_DH_LEN} bytes"
             )
         if len(self.mac) != _MAC_LEN:
-            raise KeyConfirmationFailed(
-                f'confirmation MAC must be {_MAC_LEN} bytes'
-            )
+            raise KeyConfirmationFailed(f"confirmation MAC must be {_MAC_LEN} bytes")
 
 
 def confirmation_mac_key(root_key: bytes) -> bytes:
@@ -463,9 +461,9 @@ def confirmation_mac_key(root_key: bytes) -> bytes:
     transcript is public, so without this anyone could produce a valid MAC.
     """
     if len(root_key) != _DH_LEN:
-        raise InvalidHandshakeError(f'root key must be {_DH_LEN} bytes')
+        raise InvalidHandshakeError(f"root key must be {_DH_LEN} bytes")
     return kdf_expand(
-        kdf_extract(b'\x00' * _DH_LEN, root_key), KEY_CONFIRMATION_INFO, _MAC_LEN
+        kdf_extract(b"\x00" * _DH_LEN, root_key), KEY_CONFIRMATION_INFO, _MAC_LEN
     )
 
 
@@ -494,9 +492,7 @@ def confirmation_mac(
         bytes(identity_public_x25519(bob_identity)),
         bytes(bob_ephemeral),
     )
-    return hmac.new(
-        confirmation_mac_key(root_key), transcript, hashlib.sha256
-    ).digest()
+    return hmac.new(confirmation_mac_key(root_key), transcript, hashlib.sha256).digest()
 
 
 class X3DHSession:
@@ -515,10 +511,10 @@ class X3DHSession:
         state: X3DHState,
         *,
         is_initiator: bool,
-        alice_identity: Optional[VerifyKey] = None,
-        alice_ephemeral: Optional[PublicKey] = None,
-        bob_identity: Optional[VerifyKey] = None,
-        associated_data: bytes = b'',
+        alice_identity: VerifyKey,
+        alice_ephemeral: PublicKey,
+        bob_identity: VerifyKey,
+        associated_data: bytes = b"",
     ) -> None:
         self._state = state
         self.is_initiator = is_initiator
@@ -535,33 +531,12 @@ class X3DHSession:
 
     @property
     def initiator_identity(self) -> VerifyKey:
-        """
-        Identity key of the side that started the handshake.
-
-        Raises:
-            InvalidHandshakeError: the session was built without identities, so
-                there is nothing to bind associated data to. Returning None
-                would push the failure into the AEAD, where it would be
-                indistinguishable from a wrong message key.
-        """
-        if self._alice_identity is None:
-            raise InvalidHandshakeError(
-                'this X3DH session carries no initiator identity key'
-            )
+        """Identity key of the side that started the handshake."""
         return self._alice_identity
 
     @property
     def responder_identity(self) -> VerifyKey:
-        """
-        Identity key of the side that answered the handshake.
-
-        Raises:
-            InvalidHandshakeError: the session was built without identities.
-        """
-        if self._bob_identity is None:
-            raise InvalidHandshakeError(
-                'this X3DH session carries no responder identity key'
-            )
+        """Identity key of the side that answered the handshake."""
         return self._bob_identity
 
     @property
@@ -595,7 +570,7 @@ class X3DHSession:
         """
         if not self._is_confirmed:
             raise KeyConfirmationRequired(
-                'verify the responder key confirmation before using the root key'
+                "verify the responder key confirmation before using the root key"
             )
         return self._state.master_key()
 
@@ -608,19 +583,20 @@ class X3DHSession:
         """
         if self.is_initiator:
             raise InvalidHandshakeError(
-                'only the responder produces a key confirmation'
+                "only the responder produces a key confirmation"
             )
         ephemeral = PrivateKey.generate()
-        self._bob_ephemeral = ephemeral.public_key
+        bob_ephemeral = ephemeral.public_key
+        self._bob_ephemeral = bob_ephemeral
         mac = confirmation_mac(
             self._state.master_key(),
             associated_data=self._associated_data,
             alice_identity=self._alice_identity,
             alice_ephemeral=self._alice_ephemeral,
             bob_identity=self._bob_identity,
-            bob_ephemeral=self._bob_ephemeral,
+            bob_ephemeral=bob_ephemeral,
         )
-        return KeyConfirmation(ephemeral_key=self._bob_ephemeral, mac=mac)
+        return KeyConfirmation(ephemeral_key=bob_ephemeral, mac=mac)
 
     def verify_key_confirmation(self, confirmation: KeyConfirmation) -> None:
         """
@@ -632,10 +608,10 @@ class X3DHSession:
         """
         if not self.is_initiator:
             raise InvalidHandshakeError(
-                'only the initiator verifies a key confirmation'
+                "only the initiator verifies a key confirmation"
             )
         if not isinstance(confirmation, KeyConfirmation):
-            raise InvalidHandshakeError('confirmation must be a KeyConfirmation')
+            raise InvalidHandshakeError("confirmation must be a KeyConfirmation")
 
         expected = confirmation_mac(
             self._state.master_key(),
@@ -647,7 +623,7 @@ class X3DHSession:
         )
         if not hmac.compare_digest(expected, confirmation.mac):
             raise KeyConfirmationFailed(
-                'responder key confirmation MAC does not verify'
+                "responder key confirmation MAC does not verify"
             )
         self._bob_ephemeral = confirmation.ephemeral_key
         self._is_confirmed = True
@@ -687,7 +663,7 @@ class X3DH:
         """Generate a single-use prekey. See :mod:`src.crypto.prekey_store`."""
         private_key = PrivateKey.generate()
         if key_id is None:
-            key_id = int.from_bytes(os.urandom(8), 'big')
+            key_id = int.from_bytes(os.urandom(8), "big")
         return OneTimePreKey(
             key_id=key_id,
             private_key=private_key,
@@ -723,7 +699,7 @@ class X3DH:
         """
         if len(bundle.signed_prekey_signature) != _SIG_LEN:
             raise InvalidSignatureError(
-                f'signed prekey signature must be {_SIG_LEN} bytes'
+                f"signed prekey signature must be {_SIG_LEN} bytes"
             )
         try:
             bundle.identity_key.verify(
@@ -731,7 +707,7 @@ class X3DH:
             )
         except BadSignatureError as exc:
             raise InvalidSignatureError(
-                'signed prekey signature does not match the advertised identity key'
+                "signed prekey signature does not match the advertised identity key"
             ) from exc
 
     # ------------------------------------------------------------------
@@ -752,10 +728,10 @@ class X3DH:
                 bytes(private_key), bytes(public_key)
             )
         except CryptoError as exc:
-            raise InvalidKeyError('X25519 rejected the public key') from exc
-        if shared == b'\x00' * _DH_LEN:
+            raise InvalidKeyError("X25519 rejected the public key") from exc
+        if shared == b"\x00" * _DH_LEN:
             raise InvalidKeyError(
-                'degenerate X25519 output: public key is a low-order point'
+                "degenerate X25519 output: public key is a low-order point"
             )
         return shared
 
@@ -764,7 +740,7 @@ class X3DH:
         identity_private: SigningKey,
         ephemeral: PrivateKey,
         bundle: PreKeyBundle,
-    ) -> Tuple[DhPart, ...]:
+    ) -> Tuple[Tuple[DhPart, ...], Optional[bytes]]:
         """
         DH1 = DH(IK_A, SPK_B)
         DH2 = DH(EK_A, IK_B)
@@ -783,17 +759,14 @@ class X3DH:
         identity_public_x = identity_public_x25519(bundle.identity_key)
 
         parts = [
-            DhPart(LABEL_IK_SPK,
-                   self._dh(identity_private_x, bundle.signed_prekey)),
-            DhPart(LABEL_EK_IK,
-                   self._dh(ephemeral, identity_public_x)),
-            DhPart(LABEL_EK_SPK,
-                   self._dh(ephemeral, bundle.signed_prekey)),
+            DhPart(LABEL_IK_SPK, self._dh(identity_private_x, bundle.signed_prekey)),
+            DhPart(LABEL_EK_IK, self._dh(ephemeral, identity_public_x)),
+            DhPart(LABEL_EK_SPK, self._dh(ephemeral, bundle.signed_prekey)),
         ]
         if bundle.one_time_prekey is not None:
-            parts.append(DhPart(
-                LABEL_EK_OPK, self._dh(ephemeral, bundle.one_time_prekey)
-            ))
+            parts.append(
+                DhPart(LABEL_EK_OPK, self._dh(ephemeral, bundle.one_time_prekey))
+            )
         ciphertext = None
         if bundle.pq_prekey is not None:
             shared, ciphertext = pq_encapsulate(
@@ -821,31 +794,32 @@ class X3DH:
         identity_private_x = identity_private_x25519(identity_private)
 
         parts = [
-            DhPart(LABEL_IK_SPK,
-                   self._dh(signed_prekey_private, init.identity_key_x25519)),
-            DhPart(LABEL_EK_IK,
-                   self._dh(identity_private_x, init.ephemeral_key)),
-            DhPart(LABEL_EK_SPK,
-                   self._dh(signed_prekey_private, init.ephemeral_key)),
+            DhPart(
+                LABEL_IK_SPK, self._dh(signed_prekey_private, init.identity_key_x25519)
+            ),
+            DhPart(LABEL_EK_IK, self._dh(identity_private_x, init.ephemeral_key)),
+            DhPart(LABEL_EK_SPK, self._dh(signed_prekey_private, init.ephemeral_key)),
         ]
         if init.one_time_prekey_id is not None:
             if one_time_prekey_private is None:
                 raise InvalidHandshakeError(
-                    'initiator referenced a one-time prekey but none was supplied'
+                    "initiator referenced a one-time prekey but none was supplied"
                 )
-            parts.append(DhPart(
-                LABEL_EK_OPK,
-                self._dh(one_time_prekey_private, init.ephemeral_key),
-            ))
+            parts.append(
+                DhPart(
+                    LABEL_EK_OPK,
+                    self._dh(one_time_prekey_private, init.ephemeral_key),
+                )
+            )
         if init.pq_prekey_id is not None:
             if pq_prekey_private is None or pq_ciphertext is None:
                 raise InvalidHandshakeError(
-                    'initiator referenced a post-quantum prekey but none was '
-                    'supplied'
+                    "initiator referenced a post-quantum prekey but none was "
+                    "supplied"
                 )
-            parts.append(DhPart(
-                LABEL_KEM, pq_decapsulate(pq_prekey_private, pq_ciphertext)
-            ))
+            parts.append(
+                DhPart(LABEL_KEM, pq_decapsulate(pq_prekey_private, pq_ciphertext))
+            )
         return tuple(parts)
 
     # ------------------------------------------------------------------
@@ -856,7 +830,7 @@ class X3DH:
         self,
         identity_private: SigningKey,
         bundle: PreKeyBundle,
-        associated_data: bytes = b'',
+        associated_data: bytes = b"",
         minimum_signed_prekey_id: Optional[int] = None,
     ) -> Tuple[X3DHState, HandshakeInit]:
         """
@@ -883,19 +857,21 @@ class X3DH:
             RetiredSignedPrekey: the bundle is older than the required minimum.
         """
         if not isinstance(identity_private, SigningKey):
-            raise InvalidHandshakeError('identity_private must be a SigningKey')
+            raise InvalidHandshakeError("identity_private must be a SigningKey")
         if not isinstance(bundle, PreKeyBundle):
-            raise InvalidHandshakeError('bundle must be a PreKeyBundle')
+            raise InvalidHandshakeError("bundle must be a PreKeyBundle")
 
         # Authenticate the bundle first: nothing below this line may run on an
         # unverified bundle.
         self.verify_bundle(bundle)
 
-        if minimum_signed_prekey_id is not None and \
-                bundle.signed_prekey_id < minimum_signed_prekey_id:
+        if (
+            minimum_signed_prekey_id is not None
+            and bundle.signed_prekey_id < minimum_signed_prekey_id
+        ):
             raise RetiredSignedPrekey(
-                f'bundle signed_prekey_id {bundle.signed_prekey_id} is older '
-                f'than the required {minimum_signed_prekey_id}'
+                f"bundle signed_prekey_id {bundle.signed_prekey_id} is older "
+                f"than the required {minimum_signed_prekey_id}"
             )
 
         ephemeral = PrivateKey.generate()
@@ -940,7 +916,7 @@ class X3DH:
         signed_prekey_private: PrivateKey,
         one_time_prekey_private: Optional[PrivateKey],
         init: HandshakeInit,
-        associated_data: bytes = b'',
+        associated_data: bytes = b"",
         pq_prekey_private=None,
     ) -> X3DHState:
         """
@@ -955,7 +931,7 @@ class X3DH:
                 identity key it presented, or the transcript was tampered with.
         """
         if not isinstance(init, HandshakeInit):
-            raise InvalidHandshakeError('init must be a HandshakeInit')
+            raise InvalidHandshakeError("init must be a HandshakeInit")
 
         init.verify(associated_data)
 
@@ -964,12 +940,16 @@ class X3DH:
         expected_x = identity_public_x25519(init.identity_key)
         if not hmac.compare_digest(bytes(expected_x), bytes(init.identity_key_x25519)):
             raise InvalidSignatureError(
-                'identity_key_x25519 does not match identity_key'
+                "identity_key_x25519 does not match identity_key"
             )
 
         dh_parts = self._responder_dh_parts(
-            identity_private, signed_prekey_private, one_time_prekey_private,
-            pq_prekey_private, init.pq_ciphertext, init,
+            identity_private,
+            signed_prekey_private,
+            one_time_prekey_private,
+            pq_prekey_private,
+            init.pq_ciphertext,
+            init,
         )
         return X3DHState(
             dh_parts=dh_parts,
@@ -984,9 +964,9 @@ class X3DH:
         self,
         identity_private: SigningKey,
         bundle: PreKeyBundle,
-        associated_data: bytes = b'',
+        associated_data: bytes = b"",
         minimum_signed_prekey_id: Optional[int] = None,
-    ) -> Tuple['X3DHSession', HandshakeInit]:
+    ) -> Tuple["X3DHSession", HandshakeInit]:
         """
         Initiate a handshake and get a session that is not yet usable.
 
@@ -1061,35 +1041,35 @@ class X3DH:
         """
         if isinstance(dh_parts, (bytes, bytearray, memoryview)):
             raise TypeError(
-                'derive_master_key expects the separate DH outputs as a list or '
-                'tuple, not one concatenated buffer: a buffer is ambiguous '
-                'between the 3-DH and 4-DH cases'
+                "derive_master_key expects the separate DH outputs as a list or "
+                "tuple, not one concatenated buffer: a buffer is ambiguous "
+                "between the 3-DH and 4-DH cases"
             )
         parts = list(dh_parts)
         if not parts:
-            raise ValueError('X3DH has at least three DH outputs, got 0')
+            raise ValueError("X3DH has at least three DH outputs, got 0")
         for part in parts:
             if not isinstance(part, DhPart):
                 raise TypeError(
-                    'derive_master_key expects DhPart values with labels, not '
-                    f'bare 32-byte outputs: got {type(part).__name__}. A bare '
-                    'output carries no indication of which key produced it, so '
-                    'an ML-KEM contribution and an X25519 one would be '
-                    'indistinguishable.'
+                    "derive_master_key expects DhPart values with labels, not "
+                    f"bare 32-byte outputs: got {type(part).__name__}. A bare "
+                    "output carries no indication of which key produced it, so "
+                    "an ML-KEM contribution and an X25519 one would be "
+                    "indistinguishable."
                 )
             if len(part.value) != _DH_LEN:
                 raise ValueError(
-                    f'DH output {part.label!r} must be {_DH_LEN} bytes, got '
-                    f'{len(part.value)}'
+                    f"DH output {part.label!r} must be {_DH_LEN} bytes, got "
+                    f"{len(part.value)}"
                 )
         labels = [part.label for part in parts]
         if len(set(labels)) != len(labels):
             # Two contributions with the same label means a caller assembled the
             # handshake wrong, and mixing it in would silently produce a key
             # neither specification nor this code has an opinion about.
-            raise ValueError(f'duplicate DH part labels: {labels}')
+            raise ValueError(f"duplicate DH part labels: {labels}")
 
-        salt = b'\x00' * _DH_LEN
+        salt = b"\x00" * _DH_LEN
         prk = kdf_extract(salt, X25519_F + parts_value(parts))
         return kdf_expand(prk, context, _DH_LEN)
 
@@ -1102,9 +1082,7 @@ def parts_value(parts: Sequence[DhPart]) -> bytes:
     because a second implementation of it on the other side of an HKDF is the
     exact failure :mod:`src.crypto.kdf` documents.
     """
-    return b''.join(
-        _u32(len(part.label)) + part.label + part.value for part in parts
-    )
+    return b"".join(_u32(len(part.label)) + part.label + part.value for part in parts)
 
 
 @dataclass
@@ -1199,9 +1177,9 @@ class X3DHResponder:
         candidate = self.prekey_store.peek_any()
         if candidate is None and not allow_no_one_time_prekey:
             raise PrekeyPoolExhausted(
-                'no one-time prekeys available; replenish the pool, or pass '
-                'allow_no_one_time_prekey=True to accept a session without '
-                'forward secrecy'
+                "no one-time prekeys available; replenish the pool, or pass "
+                "allow_no_one_time_prekey=True to accept a session without "
+                "forward secrecy"
             )
 
         if self.pq_prekey_store is not None:
@@ -1210,11 +1188,11 @@ class X3DHResponder:
             pq_available = None
         if pq_available is None and not allow_no_pq:
             raise PQPreKeyExhausted(
-                'no post-quantum one-time prekeys available. A session without '
-                'one has no ML-KEM contribution, so its forward secrecy does '
-                'not survive a future break of X25519. Replenish the pool, give '
-                'this responder a PQPreKeyStore, or pass allow_no_pq=True to '
-                'accept that downgrade explicitly.'
+                "no post-quantum one-time prekeys available. A session without "
+                "one has no ML-KEM contribution, so its forward secrecy does "
+                "not survive a future break of X25519. Replenish the pool, give "
+                "this responder a PQPreKeyStore, or pass allow_no_pq=True to "
+                "accept that downgrade explicitly."
             )
 
         if reserve:
@@ -1254,13 +1232,14 @@ class X3DHResponder:
         if bundle.pq_prekey_id is not None:
             if self.pq_prekey_store is None:
                 raise PQError(
-                    'this bundle carried a post-quantum prekey but the '
-                    'responder has no post-quantum store'
+                    "this bundle carried a post-quantum prekey but the "
+                    "responder has no post-quantum store"
                 )
             self.pq_prekey_store.release(bundle.pq_prekey_id)
 
-    def _spend_prekeys(self, init: HandshakeInit) -> Tuple[Optional[OneTimePreKey],
-                                                           Optional[object]]:
+    def _spend_prekeys(
+        self, init: HandshakeInit
+    ) -> Tuple[Optional[OneTimePreKey], Optional[object]]:
         """
         Take the prekeys ``init`` references, in one step.
 
@@ -1274,36 +1253,38 @@ class X3DHResponder:
             NoSuchPreKey, OneTimePreKeyAlreadyUsed: the X25519 prekey.
             NoSuchPQPreKey, PQPreKeyAlreadyUsed: the post-quantum prekey.
         """
-        if init.one_time_prekey_id is not None:
-            one_time = self.prekey_store.peek(init.one_time_prekey_id)
-        else:
-            one_time = None
+        one_time_id = init.one_time_prekey_id
+        one_time = None
+        if one_time_id is not None:
+            one_time = self.prekey_store.peek(one_time_id)
 
         pq_private = None
-        if init.pq_prekey_id is not None:
-            if self.pq_prekey_store is None:
+        pq_id = init.pq_prekey_id
+        pq_store = self.pq_prekey_store
+        if pq_id is not None:
+            if pq_store is None:
                 raise NoSuchPQPreKey(
-                    'the initiator referenced a post-quantum prekey and this '
-                    'responder has no post-quantum store; the handshake cannot '
-                    'be answered with a key both sides share'
+                    "the initiator referenced a post-quantum prekey and this "
+                    "responder has no post-quantum store; the handshake cannot "
+                    "be answered with a key both sides share"
                 )
-            pq_candidate = self.pq_prekey_store.peek(init.pq_prekey_id)
+            pq_candidate = pq_store.peek(pq_id)
             pq_private = pq_candidate.private_key
 
         # Checked, now spent.
-        if one_time is not None:
-            one_time = self.prekey_store.consume(init.one_time_prekey_id)
-        if pq_private is not None:
-            pq_private = self.pq_prekey_store.consume(
-                init.pq_prekey_id
-            ).private_key
+        if one_time_id is not None:
+            one_time = self.prekey_store.consume(one_time_id)
+        if pq_id is not None:
+            if pq_store is None:  # pragma: no cover - checked above
+                raise NoSuchPQPreKey("post-quantum store disappeared")
+            pq_private = pq_store.consume(pq_id).private_key
         return one_time, pq_private
 
     def respond(
         self,
         init: HandshakeInit,
-        associated_data: bytes = b'',
-    ) -> 'X3DHSession':
+        associated_data: bytes = b"",
+    ) -> "X3DHSession":
         """
         Authenticate an initiator handshake and get a responder session.
 
@@ -1312,7 +1293,7 @@ class X3DHResponder:
         that this side derived the same root key.
         """
         if not isinstance(init, HandshakeInit):
-            raise InvalidHandshakeError('init must be a HandshakeInit')
+            raise InvalidHandshakeError("init must be a HandshakeInit")
 
         # Authenticate BEFORE spending a prekey. See handle_init.
         init.verify(associated_data)
@@ -1339,7 +1320,7 @@ class X3DHResponder:
     def handle_init(
         self,
         init: HandshakeInit,
-        associated_data: bytes = b'',
+        associated_data: bytes = b"",
     ) -> X3DHState:
         """
         Verify and process an initiator handshake, consuming the one-time prekeys.
@@ -1362,7 +1343,7 @@ class X3DHResponder:
             InvalidSignatureError: the initiator failed authentication.
         """
         if not isinstance(init, HandshakeInit):
-            raise InvalidHandshakeError('init must be a HandshakeInit')
+            raise InvalidHandshakeError("init must be a HandshakeInit")
 
         # Authenticate BEFORE spending a prekey.
         #

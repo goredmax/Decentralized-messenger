@@ -81,9 +81,7 @@ class TestReopen:
         alice = DoubleRatchet.from_state(
             SessionState.deserialize(alice.state.serialize())
         )
-        bob = DoubleRatchet.from_state(
-            SessionState.deserialize(bob.state.serialize())
-        )
+        bob = DoubleRatchet.from_state(SessionState.deserialize(bob.state.serialize()))
 
         second, second_hdr = alice.encrypt(b"after restart")
         assert bob.decrypt(second, second_hdr) == b"after restart"
@@ -126,18 +124,18 @@ class TestReopen:
     def test_rejects_a_foreign_version(self):
         alice, _ = create_session_pair()
         payload = alice.state.serialize()
-        payload['version'] = PROTOCOL_VERSION + 1
+        payload["version"] = PROTOCOL_VERSION + 1
         with pytest.raises(IncompatibleSessionError):
             DoubleRatchet.from_state(SessionState.deserialize(payload))
 
     def test_rejects_a_dict_without_a_version(self):
         """from_state takes a serialized dict, so a bare dict is refused."""
         with pytest.raises(IncompatibleSessionError):
-            DoubleRatchet.from_state({'root_key': '00' * 32})
+            DoubleRatchet.from_state({"root_key": "00" * 32})
 
     def test_rejects_a_malformed_dict(self):
         payload = create_session_pair()[0].state.serialize()
-        del payload['dh_local_priv']
+        del payload["dh_local_priv"]
         with pytest.raises(Exception):
             DoubleRatchet.from_state(payload)
 
@@ -173,7 +171,7 @@ class TestReopen:
                 dh_local_priv=state.dh_local_priv,
                 dh_local_pub=state.dh_local_pub,
                 dh_remote_pub=state.dh_remote_pub,
-                root_key=b'\x00' * 16,
+                root_key=b"\x00" * 16,
                 send_chain_key=state.send_chain_key,
                 recv_chain_key=state.recv_chain_key,
             )
@@ -212,9 +210,7 @@ class TestOutstandingMessagesAfterReopen:
         _, bob, held = self._alice_sends_three()
         assert len(bob.state.skipped_keys) == 2
 
-        bob = DoubleRatchet.from_state(
-            SessionState.deserialize(bob.state.serialize())
-        )
+        bob = DoubleRatchet.from_state(SessionState.deserialize(bob.state.serialize()))
         assert len(bob.state.skipped_keys) == 0
 
         with pytest.raises(Exception):
@@ -227,9 +223,7 @@ class TestOutstandingMessagesAfterReopen:
         """
         _, bob, held = self._alice_sends_three()
         payload = json.dumps(bob.state.serialize(include_message_keys=True))
-        bob = DoubleRatchet.from_state(
-            SessionState.deserialize(json.loads(payload))
-        )
+        bob = DoubleRatchet.from_state(SessionState.deserialize(json.loads(payload)))
         assert len(bob.state.skipped_keys) == 2
         assert bob.decrypt(*held[0]) == b"Msg 0"
         assert bob.decrypt(*held[1]) == b"Msg 1"
@@ -241,4 +235,4 @@ class TestOutstandingMessagesAfterReopen:
 
         leaky = json.dumps(bob.state.serialize(include_message_keys=True))
         for key in bob.state.skipped_keys.values():
-            assert key.hex() in leaky, 'this is the exposure being documented'
+            assert key.hex() in leaky, "this is the exposure being documented"

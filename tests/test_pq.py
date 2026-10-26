@@ -81,8 +81,7 @@ def make_responder(prekey_count=3, pq_prekey_count=3):
         signed_prekey_private=signed_prekey_private,
         prekey_store=store,
         pq_prekey_store=(
-            None if pq_prekey_count is None
-            else stocked_pq_store(pq_prekey_count)
+            None if pq_prekey_count is None else stocked_pq_store(pq_prekey_count)
         ),
     )
     return x3dh, responder
@@ -91,6 +90,7 @@ def make_responder(prekey_count=3, pq_prekey_count=3):
 # ---------------------------------------------------------------------------
 # The primitive
 # ---------------------------------------------------------------------------
+
 
 def test_the_sizes_are_the_ones_ml_kem_768_defines():
     prekey = generate_prekey()
@@ -134,7 +134,7 @@ def test_a_seed_of_the_wrong_length_is_refused():
     with "a seed is 64 bytes long". Wrong here means a responder that cannot
     reopen its pool.
     """
-    for seed in (b'', b'\x00' * 32, b'\x00' * 63, b'\x00' * 65):
+    for seed in (b"", b"\x00" * 32, b"\x00" * 63, b"\x00" * 65):
         with pytest.raises(PQError):
             PQOneTimePreKey.from_seed(1, seed)
 
@@ -164,7 +164,7 @@ def test_a_wrong_ciphertext_gives_a_different_secret_rather_than_an_error():
     """
     prekey = generate_prekey()
     _, ciphertext = encapsulate(prekey.public_key)
-    tampered = b'\x00' * CIPHERTEXT_LEN
+    tampered = b"\x00" * CIPHERTEXT_LEN
     assert decapsulate(prekey.private_key, tampered) != decapsulate(
         prekey.private_key, ciphertext
     )
@@ -173,15 +173,23 @@ def test_a_wrong_ciphertext_gives_a_different_secret_rather_than_an_error():
 
 def test_a_ciphertext_of_the_wrong_length_is_refused():
     prekey = generate_prekey()
-    for bad in (b'', b'\x00' * 32, b'\x00' * (CIPHERTEXT_LEN - 1),
-                b'\x00' * (CIPHERTEXT_LEN + 1)):
+    for bad in (
+        b"",
+        b"\x00" * 32,
+        b"\x00" * (CIPHERTEXT_LEN - 1),
+        b"\x00" * (CIPHERTEXT_LEN + 1),
+    ):
         with pytest.raises(InvalidPQKey):
             decapsulate(prekey.private_key, bad)
 
 
 def test_a_public_key_of_the_wrong_length_is_refused():
-    for bad in (b'', b'\x00' * 32, b'\x00' * (PUBLIC_KEY_LEN - 1),
-                b'\x00' * (PUBLIC_KEY_LEN + 1)):
+    for bad in (
+        b"",
+        b"\x00" * 32,
+        b"\x00" * (PUBLIC_KEY_LEN - 1),
+        b"\x00" * (PUBLIC_KEY_LEN + 1),
+    ):
         with pytest.raises(InvalidPQKey):
             load_public_key(bad)
 
@@ -200,37 +208,42 @@ def test_a_der_spki_of_the_wrong_algorithm_would_have_loaded():
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519
 
-    spki = ed25519.Ed25519PrivateKey.generate().public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
+    spki = (
+        ed25519.Ed25519PrivateKey.generate()
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
     )
     loaded = serialization.load_der_public_key(spki)
-    assert not isinstance(loaded, type(load_public_key(b'\x00' * PUBLIC_KEY_LEN)))
+    assert not isinstance(loaded, type(load_public_key(b"\x00" * PUBLIC_KEY_LEN)))
 
 
 def test_a_repr_does_not_leak_the_private_key():
     prekey = generate_prekey(key_id=99)
     text = repr(prekey)
-    assert '99' in text
+    assert "99" in text
     assert prekey.seed.hex()[:16] not in text
     assert prekey.public_bytes.hex()[:8] in text
 
 
 def test_a_prekey_id_must_be_a_64_bit_int():
     key = generate_prekey()
-    for bad in (-1, 2 ** 64, True, 'x'):
+    for bad in (-1, 2**64, True, "x"):
         with pytest.raises(PQError):
             PQOneTimePreKey(key_id=bad, private_key=key.private_key)
 
 
 def test_a_prekey_needs_an_mlkem_private_key():
     with pytest.raises(PQError):
-        PQOneTimePreKey(key_id=1, private_key=b'\x00' * 64)
+        PQOneTimePreKey(key_id=1, private_key=b"\x00" * 64)
 
 
 # ---------------------------------------------------------------------------
 # The pool
 # ---------------------------------------------------------------------------
+
 
 def test_a_stocked_pool_has_the_keys_it_says():
     store = stocked_pq_store(5)
@@ -324,9 +337,9 @@ def test_two_threads_racing_for_one_key_leave_one_winner():
     def attempt():
         barrier.wait()
         try:
-            results.append(('ok', store.consume(0).key_id))
+            results.append(("ok", store.consume(0).key_id))
         except PQPreKeyAlreadyUsed as exc:
-            results.append(('refused', str(exc)))
+            results.append(("refused", str(exc)))
 
     threads = [threading.Thread(target=attempt) for _ in range(2)]
     for thread in threads:
@@ -335,13 +348,14 @@ def test_two_threads_racing_for_one_key_leave_one_winner():
         thread.join(timeout=5)
 
     outcomes = sorted(kind for kind, _ in results)
-    assert outcomes == ['ok', 'refused']
+    assert outcomes == ["ok", "refused"]
     assert store.count() == 0
 
 
 # ---------------------------------------------------------------------------
 # PQXDH
 # ---------------------------------------------------------------------------
+
 
 def test_the_root_key_includes_the_kem_contribution():
     x3dh, responder = make_responder()
@@ -370,7 +384,7 @@ def test_a_responder_without_a_post_quantum_pool_refuses_to_publish():
     x3dh, responder = make_responder(pq_prekey_count=None)
     with pytest.raises(Exception) as caught:
         responder.publish_bundle()
-    assert 'ML-KEM' in str(caught.value) or 'post-quantum' in str(caught.value)
+    assert "ML-KEM" in str(caught.value) or "post-quantum" in str(caught.value)
 
 
 def test_a_responder_that_never_advertised_a_post_quantum_key_cannot_answer_one():
@@ -467,6 +481,7 @@ def test_a_forged_handshake_spends_neither_pool():
     before_pq = pq_store.count()
 
     from nacl.public import PrivateKey
+
     forged = replace(init, ephemeral_key=PrivateKey.generate().public_key)
     with pytest.raises(InvalidSignatureError):
         responder.handle_init(forged)
@@ -492,6 +507,7 @@ def test_the_bundle_refuses_a_prekey_and_id_that_disagree():
 # ---------------------------------------------------------------------------
 # The ciphertext is inside the signature
 # ---------------------------------------------------------------------------
+
 
 def test_swapping_the_post_quantum_ciphertext_breaks_the_signature():
     """
@@ -543,7 +559,7 @@ def test_a_handshake_without_a_ciphertext_but_with_an_id_is_refused():
             identity_key=signing.verify_key,
             identity_key_x25519=identity_public_x25519(signing.verify_key),
             ephemeral_key=_PrivateKey.generate().public_key,
-            signature=signing.sign(b'x').signature,
+            signature=signing.sign(b"x").signature,
             pq_prekey_id=1,
         )
 
@@ -555,12 +571,13 @@ def test_a_handshake_ciphertext_of_the_wrong_length_is_refused():
     alice_private, _ = x3dh.generate_identity_keys()
     _, init = x3dh.initiate_handshake(alice_private, responder.publish_bundle())
     with pytest.raises(InvalidHandshakeError):
-        replace(init, pq_ciphertext=b'\x00' * 100)
+        replace(init, pq_ciphertext=b"\x00" * 100)
 
 
 # ---------------------------------------------------------------------------
 # The wire format
 # ---------------------------------------------------------------------------
+
 
 def test_a_bundle_round_trips_with_its_post_quantum_key():
     x3dh, responder = make_responder()
@@ -570,8 +587,7 @@ def test_a_bundle_round_trips_with_its_post_quantum_key():
 
     assert frame[1] == KIND_PREKEY_BUNDLE
     assert decoded.pq_prekey_id == bundle.pq_prekey_id
-    assert decoded.pq_prekey.public_bytes_raw() == \
-        bundle.pq_prekey.public_bytes_raw()
+    assert decoded.pq_prekey.public_bytes_raw() == bundle.pq_prekey.public_bytes_raw()
     # And the round-tripped bundle still works for a handshake, which is the only
     # proof that what crossed the wire was usable.
     alice_private, _ = x3dh.generate_identity_keys()
@@ -622,22 +638,26 @@ def test_a_bundle_with_a_truncated_post_quantum_key_is_refused():
     # Keep the flag, cut the key: the decoder must notice the payload ran out.
     assert len(frame) > PUBLIC_KEY_LEN
     with pytest.raises(Exception):
-        decode_prekey_bundle(frame[:len(frame) - PUBLIC_KEY_LEN // 2])
+        decode_prekey_bundle(frame[: len(frame) - PUBLIC_KEY_LEN // 2])
 
 
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
-def persistent_store(tmp_path, name='pq.bin'):
+
+def persistent_store(tmp_path, name="pq.bin"):
     from src.storage.container import KdfParams
 
     path = str(tmp_path / name)
-    return PersistentPQPreKeyStore(
-        Container.create(
-            path, 'password', kdf_params=KdfParams(n_log2=12, r=8, p=1)
-        )
-    ), path
+    return (
+        PersistentPQPreKeyStore(
+            Container.create(
+                path, "password", kdf_params=KdfParams(n_log2=12, r=8, p=1)
+            )
+        ),
+        path,
+    )
 
 
 def test_a_pool_survives_a_restart(tmp_path):
@@ -647,9 +667,8 @@ def test_a_pool_survives_a_restart(tmp_path):
     expected = {index: store.peek(index).public_bytes for index in range(3)}
 
     from src.storage.container import KdfParams
-    reopened = PersistentPQPreKeyStore(
-        Container.open(path, 'password')
-    )
+
+    reopened = PersistentPQPreKeyStore(Container.open(path, "password"))
     assert reopened.count() == 3
     for index in range(3):
         assert reopened.peek(index).public_bytes == expected[index]
@@ -670,7 +689,8 @@ def test_a_spent_key_stays_spent_across_a_restart(tmp_path):
     store.consume(0)
 
     from src.storage.container import KdfParams
-    reopened = PersistentPQPreKeyStore(Container.open(path, 'password'))
+
+    reopened = PersistentPQPreKeyStore(Container.open(path, "password"))
     assert reopened.was_consumed(0)
     with pytest.raises(PQPreKeyAlreadyUsed):
         reopened.consume(0)
@@ -682,11 +702,11 @@ def test_the_pool_is_sealed(tmp_path):
     store, path = persistent_store(tmp_path)
     prekey = generate_prekey(key_id=5)
     store.put(prekey)
-    raw = open(path, 'rb').read()
+    raw = open(path, "rb").read()
     assert prekey.seed not in raw
     assert prekey.public_bytes not in raw
-    assert b'prekeys' not in raw
-    assert b'consumed' not in raw
+    assert b"prekeys" not in raw
+    assert b"consumed" not in raw
 
 
 def test_a_corrupt_pool_is_refused(tmp_path):
@@ -696,11 +716,11 @@ def test_a_corrupt_pool_is_refused(tmp_path):
     store.put(generate_prekey(key_id=1))
     container = store._container
     for payload in (
-        b'not json',
-        json.dumps({'prekeys': 'not an object'}).encode(),
-        json.dumps({'prekeys': {'x': 'AAAA'}}).encode(),
-        json.dumps({'prekeys': {}}).encode() + b'trailing',
-        json.dumps({'prekeys': {}, 'consumed': 'not a list'}).encode(),
+        b"not json",
+        json.dumps({"prekeys": "not an object"}).encode(),
+        json.dumps({"prekeys": {"x": "AAAA"}}).encode(),
+        json.dumps({"prekeys": {}}).encode() + b"trailing",
+        json.dumps({"prekeys": {}, "consumed": "not a list"}).encode(),
     ):
         container.store(payload, container.load()[0] + 1)
         with pytest.raises(StorageError):
@@ -713,7 +733,7 @@ def test_a_wrong_password_is_refused(tmp_path):
     store, path = persistent_store(tmp_path)
     store.put(generate_prekey(key_id=1))
     with pytest.raises(WrongPassword):
-        PersistentPQPreKeyStore(Container.open(path, 'wrong'))
+        PersistentPQPreKeyStore(Container.open(path, "wrong"))
 
 
 def test_a_persisted_pool_keeps_a_handshake_post_quantum(tmp_path):
@@ -724,7 +744,7 @@ def test_a_persisted_pool_keeps_a_handshake_post_quantum(tmp_path):
     """
     from src.crypto.prekey_store import InMemoryPreKeyStore
 
-    store, path = persistent_store(tmp_path, 'pqkeys.bin')
+    store, path = persistent_store(tmp_path, "pqkeys.bin")
     store.replenish(0, 3)
 
     x3dh = X3DH()
@@ -756,10 +776,9 @@ def test_a_wrong_algorithm_key_is_not_accepted_as_a_prekey():
 
     key = mlkem.MLKEM768PrivateKey.generate().public_key()
     assert isinstance(key, mlkem.MLKEM768PublicKey)
-    assert isinstance(load_public_key(key.public_bytes_raw()),
-                      mlkem.MLKEM768PublicKey)
+    assert isinstance(load_public_key(key.public_bytes_raw()), mlkem.MLKEM768PublicKey)
     with pytest.raises(InvalidPQKey):
-        load_public_key('not bytes')
+        load_public_key("not bytes")
 
 
 def test_engaging_the_pool_never_returns_a_spent_key(tmp_path):
@@ -776,7 +795,8 @@ def test_engaging_the_pool_never_returns_a_spent_key(tmp_path):
     first = store.reserve_next()
 
     spare = next(
-        key_id for key_id in store.available_ids()
+        key_id
+        for key_id in store.available_ids()
         if key_id not in {first.key_id, *store.reserved_ids()}
     )
     store.consume(spare)

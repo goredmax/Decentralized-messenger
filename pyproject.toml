@@ -47,3 +47,15 @@ packages = [
     "src.storage",
     "src.tor",
 ]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+show_error_codes = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true

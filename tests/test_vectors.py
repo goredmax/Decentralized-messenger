@@ -48,7 +48,7 @@ from src.crypto.key_management import (
 
 def h(text: str) -> bytes:
     """Hex, tolerating the whitespace the RFCs use to group their output."""
-    return bytes.fromhex(''.join(text.split()))
+    return bytes.fromhex("".join(text.split()))
 
 
 # ---------------------------------------------------------------------------
@@ -63,44 +63,52 @@ def h(text: str) -> bytes:
 
 #: A.1, basic test case with SHA-256.
 RFC5869_CASE_1 = {
-    'ikm': h('0b' * 22),
-    'salt': h('000102030405060708090a0b0c'),
-    'info': h('f0f1f2f3f4f5f6f7f8f9'),
-    'length': 42,
-    'prk': h('077709362c2e32df0ddc3f0dc47bba63'
-             '90b6c73bb50f9c3122ec844ad7c2b3e5'),
-    'okm': h('3cb25f25faacd57a90434f64d0362f2a'
-             '2d2d0a90cf1a5a4c5db02d56ecc4c5bf'
-             '34007208d5b887185865'),
+    "ikm": h("0b" * 22),
+    "salt": h("000102030405060708090a0b0c"),
+    "info": h("f0f1f2f3f4f5f6f7f8f9"),
+    "length": 42,
+    "prk": h("077709362c2e32df0ddc3f0dc47bba63" "90b6c73bb50f9c3122ec844ad7c2b3e5"),
+    "okm": h(
+        "3cb25f25faacd57a90434f64d0362f2a"
+        "2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
+        "34007208d5b887185865"
+    ),
 }
 
 #: A.2, SHA-256 with longer inputs and outputs. L=82 needs three HMAC blocks,
 #: so this is the vector that would catch an off-by-one in the block counter.
 RFC5869_CASE_2 = {
-    'ikm': h('000102030405060708090a0b0c0d0e0f'
-             '101112131415161718191a1b1c1d1e1f'
-             '202122232425262728292a2b2c2d2e2f'
-             '303132333435363738393a3b3c3d3e3f'
-             '404142434445464748494a4b4c4d4e4f'),
-    'salt': h('606162636465666768696a6b6c6d6e6f'
-              '707172737475767778797a7b7c7d7e7f'
-              '808182838485868788898a8b8c8d8e8f'
-              '909192939495969798999a9b9c9d9e9f'
-              'a0a1a2a3a4a5a6a7a8a9aaabacadaeaf'),
-    'info': h('b0b1b2b3b4b5b6b7b8b9babbbcbdbebf'
-              'c0c1c2c3c4c5c6c7c8c9cacbcccdcecf'
-              'd0d1d2d3d4d5d6d7d8d9dadbdcdddedf'
-              'e0e1e2e3e4e5e6e7e8e9eaebecedeeef'
-              'f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'),
-    'length': 82,
-    'prk': h('06a6b88c5853361a06104c9ceb35b45c'
-             'ef760014904671014a193f40c15fc244'),
-    'okm': h('b11e398dc80327a1c8e7f78c596a4934'
-             '4f012eda2d4efad8a050cc4c19afa97c'
-             '59045a99cac7827271cb41c65e590e09'
-             'da3275600c2f09b8367793a9aca3db71'
-             'cc30c58179ec3e87c14c01d5c1f3434f'
-             '1d87'),
+    "ikm": h(
+        "000102030405060708090a0b0c0d0e0f"
+        "101112131415161718191a1b1c1d1e1f"
+        "202122232425262728292a2b2c2d2e2f"
+        "303132333435363738393a3b3c3d3e3f"
+        "404142434445464748494a4b4c4d4e4f"
+    ),
+    "salt": h(
+        "606162636465666768696a6b6c6d6e6f"
+        "707172737475767778797a7b7c7d7e7f"
+        "808182838485868788898a8b8c8d8e8f"
+        "909192939495969798999a9b9c9d9e9f"
+        "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf"
+    ),
+    "info": h(
+        "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf"
+        "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf"
+        "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf"
+        "e0e1e2e3e4e5e6e7e8e9eaebecedeeef"
+        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"
+    ),
+    "length": 82,
+    "prk": h("06a6b88c5853361a06104c9ceb35b45c" "ef760014904671014a193f40c15fc244"),
+    "okm": h(
+        "b11e398dc80327a1c8e7f78c596a4934"
+        "4f012eda2d4efad8a050cc4c19afa97c"
+        "59045a99cac7827271cb41c65e590e09"
+        "da3275600c2f09b8367793a9aca3db71"
+        "cc30c58179ec3e87c14c01d5c1f3434f"
+        "1d87"
+    ),
 }
 
 #: A.3, SHA-256 with zero-length salt *and* zero-length info. This is the
@@ -108,26 +116,27 @@ RFC5869_CASE_2 = {
 #: salt is HashLen zero bytes, which is a rule an implementation can get wrong
 #: in a way that still round-trips.
 RFC5869_CASE_3 = {
-    'ikm': h('0b' * 22),
-    'salt': b'',
-    'info': b'',
-    'length': 42,
-    'prk': h('19ef24a32c717b167f33a91d6f648bdf'
-             '96596776afdb6377ac434c1c293ccb04'),
-    'okm': h('8da4e775a563c18f715f802a063c5a31'
-             'b8a11f5c5ee1879ec3454e5f3c738d2d'
-             '9d201395faa4b61a96c8'),
+    "ikm": h("0b" * 22),
+    "salt": b"",
+    "info": b"",
+    "length": 42,
+    "prk": h("19ef24a32c717b167f33a91d6f648bdf" "96596776afdb6377ac434c1c293ccb04"),
+    "okm": h(
+        "8da4e775a563c18f715f802a063c5a31"
+        "b8a11f5c5ee1879ec3454e5f3c738d2d"
+        "9d201395faa4b61a96c8"
+    ),
 }
 
 RFC5869_CASES = [
-    pytest.param(RFC5869_CASE_1, id='A.1-basic'),
-    pytest.param(RFC5869_CASE_2, id='A.2-long'),
-    pytest.param(RFC5869_CASE_3, id='A.3-zero-salt-and-info'),
+    pytest.param(RFC5869_CASE_1, id="A.1-basic"),
+    pytest.param(RFC5869_CASE_2, id="A.2-long"),
+    pytest.param(RFC5869_CASE_3, id="A.3-zero-salt-and-info"),
 ]
 
 
 class TestHkdfRfc5869:
-    @pytest.mark.parametrize('case', RFC5869_CASES)
+    @pytest.mark.parametrize("case", RFC5869_CASES)
     def test_extract_matches_the_rfc_prk(self, case):
         """
         The intermediate value, which nothing checked before.
@@ -135,17 +144,17 @@ class TestHkdfRfc5869:
         extract() and expand() are separate functions here, so a bug in either
         could hide behind the other. The published PRK pins the split.
         """
-        assert extract(case['salt'], case['ikm']) == case['prk']
+        assert extract(case["salt"], case["ikm"]) == case["prk"]
 
-    @pytest.mark.parametrize('case', RFC5869_CASES)
+    @pytest.mark.parametrize("case", RFC5869_CASES)
     def test_expand_matches_the_rfc_okm(self, case):
-        assert expand(case['prk'], case['info'], case['length']) == case['okm']
+        assert expand(case["prk"], case["info"], case["length"]) == case["okm"]
 
-    @pytest.mark.parametrize('case', RFC5869_CASES)
+    @pytest.mark.parametrize("case", RFC5869_CASES)
     def test_combined_matches_the_rfc_okm(self, case):
-        assert hkdf(
-            case['salt'], case['ikm'], case['info'], case['length']
-        ) == case['okm']
+        assert (
+            hkdf(case["salt"], case["ikm"], case["info"], case["length"]) == case["okm"]
+        )
 
     def test_absent_salt_matches_an_explicit_zero_salt(self):
         """
@@ -155,9 +164,9 @@ class TestHkdfRfc5869:
         path. A caller elsewhere must not get a different answer for omitting
         the salt, and must get the same PRK either way.
         """
-        ikm, info = RFC5869_CASE_1['ikm'], RFC5869_CASE_1['info']
-        assert extract(b'', ikm) == extract(b'\x00' * 32, ikm)
-        assert hkdf(b'', ikm, info, 42) == hkdf(b'\x00' * 32, ikm, info, 42)
+        ikm, info = RFC5869_CASE_1["ikm"], RFC5869_CASE_1["info"]
+        assert extract(b"", ikm) == extract(b"\x00" * 32, ikm)
+        assert hkdf(b"", ikm, info, 42) == hkdf(b"\x00" * 32, ikm, info, 42)
 
     def test_zero_salt_case_three_agrees_with_the_rfc(self):
         """
@@ -168,18 +177,16 @@ class TestHkdfRfc5869:
         an empty HMAC key rather than as 32 zero bytes. RFC 5869 A.3 is the
         vector that distinguishes those, so it is worth naming.
         """
-        assert extract(b'', RFC5869_CASE_3['ikm']) == RFC5869_CASE_3['prk']
-        assert (
-            expand(RFC5869_CASE_3['prk'], b'', 42) == RFC5869_CASE_3['okm']
-        )
+        assert extract(b"", RFC5869_CASE_3["ikm"]) == RFC5869_CASE_3["prk"]
+        assert expand(RFC5869_CASE_3["prk"], b"", 42) == RFC5869_CASE_3["okm"]
 
     def test_maximum_output_length(self):
         """
         RFC 5869 section 2.3: L <= 255*HashLen. The 255-block boundary is an
         explicit limit in expand() and is tested at the edge.
         """
-        prk = RFC5869_CASE_1['prk']
-        info = RFC5869_CASE_1['info']
+        prk = RFC5869_CASE_1["prk"]
+        info = RFC5869_CASE_1["info"]
         assert len(expand(prk, info, 255 * 32)) == 255 * 32
         with pytest.raises(ValueError):
             expand(prk, info, 255 * 32 + 1)
@@ -194,29 +201,29 @@ class TestHkdfRfc5869:
 
 #: 5.2, X25519, first vector.
 RFC7748_X25519_1 = (
-    'a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4',
-    'e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c',
-    'c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552',
+    "a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4",
+    "e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c",
+    "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
 )
 
 #: 5.2, X25519, second vector.
 RFC7748_X25519_2 = (
-    '4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d',
-    'e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493',
-    '95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957',
+    "4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d",
+    "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
+    "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
 )
 
 #: 5.2, the iterated form: k and u both start at 09 followed by 31 zero bytes,
 #: and each iteration sets k to f(k) and u to the old k.
-RFC7748_ITERATED_SEED = h('09' + '00' * 31)
+RFC7748_ITERATED_SEED = h("09" + "00" * 31)
 RFC7748_ITERATED_1 = h(
-    '422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079'
+    "422c8e7a6227d7bca1350b3e2bb7279f7897b87bb6854b783c60e80311ae3079"
 )
 RFC7748_ITERATED_1000 = h(
-    '684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51'
+    "684cf59ba83309552800ef566f2f4d3c1c3887c49360e3875f2eb94d99532c51"
 )
 RFC7748_ITERATED_1000000 = h(
-    '7c3911e0ab2586fd864497297e575e6f3bc601c0883c30df5f4dd2d24f665424'
+    "7c3911e0ab2586fd864497297e575e6f3bc601c0883c30df5f4dd2d24f665424"
 )
 
 
@@ -233,16 +240,21 @@ def _x25519(scalar: bytes, u_coordinate: bytes) -> bytes:
 
 
 class TestX25519Rfc7748:
-    @pytest.mark.parametrize('vector', [RFC7748_X25519_1, RFC7748_X25519_2],
-                             ids=['first', 'second'])
+    @pytest.mark.parametrize(
+        "vector", [RFC7748_X25519_1, RFC7748_X25519_2], ids=["first", "second"]
+    )
     def test_scalarmult_matches_the_rfc(self, vector):
         scalar, u_coordinate, expected = (h(part) for part in vector)
         assert _x25519(scalar, u_coordinate) == expected
 
-    @pytest.mark.parametrize('iterations, expected', [
-        (1, RFC7748_ITERATED_1),
-        (1000, RFC7748_ITERATED_1000),
-    ], ids=['1-iteration', '1000-iterations'])
+    @pytest.mark.parametrize(
+        "iterations, expected",
+        [
+            (1, RFC7748_ITERATED_1),
+            (1000, RFC7748_ITERATED_1000),
+        ],
+        ids=["1-iteration", "1000-iterations"],
+    )
     def test_iterated_matches_the_rfc(self, iterations, expected):
         """
         The iterated vectors catch a wrong clamping or a non-X25519 ladder.
@@ -286,7 +298,7 @@ class TestX25519Rfc7748:
         Deleting it would lose the reference; keeping it documents the choice
         above. Guarded on the value so an accidental edit is caught.
         """
-        assert RFC7748_ITERATED_1000000.hex().startswith('7c3911e0ab2586fd')
+        assert RFC7748_ITERATED_1000000.hex().startswith("7c3911e0ab2586fd")
         assert len(RFC7748_ITERATED_1000000) == 32
 
 
@@ -301,73 +313,75 @@ class TestX25519Rfc7748:
 
 #: 7.1 TEST 1 -- empty message.
 RFC8032_TEST_1 = {
-    'secret': h('9d61b19deffd5a60ba844af492ec2cc4'
-                '4449c5697b326919703bac031cae7f60'),
-    'public': h('d75a980182b10ab7d54bfed3c964073a'
-                '0ee172f3daa62325af021a68f707511a'),
-    'message': b'',
-    'signature': h('e5564300c360ac729086e2cc806e828a'
-                   '84877f1eb8e5d974d873e06522490155'
-                   '5fb8821590a33bacc61e39701cf9b46b'
-                   'd25bf5f0595bbe24655141438e7a100b'),
+    "secret": h("9d61b19deffd5a60ba844af492ec2cc4" "4449c5697b326919703bac031cae7f60"),
+    "public": h("d75a980182b10ab7d54bfed3c964073a" "0ee172f3daa62325af021a68f707511a"),
+    "message": b"",
+    "signature": h(
+        "e5564300c360ac729086e2cc806e828a"
+        "84877f1eb8e5d974d873e06522490155"
+        "5fb8821590a33bacc61e39701cf9b46b"
+        "d25bf5f0595bbe24655141438e7a100b"
+    ),
 }
 
 #: 7.1 TEST 2 -- one byte, 0x72.
 RFC8032_TEST_2 = {
-    'secret': h('4ccd089b28ff96da9db6c346ec114e0f'
-                '5b8a319f35aba624da8cf6ed4fb8a6fb'),
-    'public': h('3d4017c3e843895a92b70aa74d1b7ebc'
-                '9c982ccf2ec4968cc0cd55f12af4660c'),
-    'message': h('72'),
-    'signature': h('92a009a9f0d4cab8720e820b5f642540'
-                   'a2b27b5416503f8fb3762223ebdb69da'
-                   '085ac1e43e15996e458f3613d0f11d8c'
-                   '387b2eaeb4302aeeb00d291612bb0c00'),
+    "secret": h("4ccd089b28ff96da9db6c346ec114e0f" "5b8a319f35aba624da8cf6ed4fb8a6fb"),
+    "public": h("3d4017c3e843895a92b70aa74d1b7ebc" "9c982ccf2ec4968cc0cd55f12af4660c"),
+    "message": h("72"),
+    "signature": h(
+        "92a009a9f0d4cab8720e820b5f642540"
+        "a2b27b5416503f8fb3762223ebdb69da"
+        "085ac1e43e15996e458f3613d0f11d8c"
+        "387b2eaeb4302aeeb00d291612bb0c00"
+    ),
 }
 
 #: 7.1 TEST 3 -- two bytes, 0xaf82.
 RFC8032_TEST_3 = {
-    'secret': h('c5aa8df43f9f837bedb7442f31dcb7b1'
-                '66d38535076f094b85ce3a2e0b4458f7'),
-    'public': h('fc51cd8e6218a1a38da47ed00230f058'
-                '0816ed13ba3303ac5deb911548908025'),
-    'message': h('af82'),
-    'signature': h('6291d657deec24024827e69c3abe01a3'
-                   '0ce548a284743a445e3680d7db5ac3ac'
-                   '18ff9b538d16f290ae67f760984dc659'
-                   '4a7c15e9716ed28dc027beceea1ec40a'),
+    "secret": h("c5aa8df43f9f837bedb7442f31dcb7b1" "66d38535076f094b85ce3a2e0b4458f7"),
+    "public": h("fc51cd8e6218a1a38da47ed00230f058" "0816ed13ba3303ac5deb911548908025"),
+    "message": h("af82"),
+    "signature": h(
+        "6291d657deec24024827e69c3abe01a3"
+        "0ce548a284743a445e3680d7db5ac3ac"
+        "18ff9b538d16f290ae67f760984dc659"
+        "4a7c15e9716ed28dc027beceea1ec40a"
+    ),
 }
 
 #: 7.1 TEST SHA(abc) -- 64 bytes, the standard abc test.
 RFC8032_TEST_SHA_ABC = {
-    'secret': h('833fe62409237b9d62ec77587520911e'
-                '9a759cec1d19755b7da901b96dca3d42'),
-    'public': h('ec172b93ad5e563bf4932c70e1245034'
-                'c35467ef2efd4d64ebf819683467e2bf'),
-    'message': h('ddaf35a193617abacc417349ae204131'
-                 '12e6fa4e89a97ea20a9eeee64b55d39a'
-                 '2192992a274fc1a836ba3c23a3feebbd'
-                 '454d4423643ce80e2a9ac94fa54ca49f'),
-    'signature': h('dc2a4459e7369633a52b1bf277839a00'
-                   '201009a3efbf3ecb69bea2186c26b589'
-                   '09351fc9ac90b3ecfdfbc7c66431e030'
-                   '3dca179c138ac17ad9bef1177331a704'),
+    "secret": h("833fe62409237b9d62ec77587520911e" "9a759cec1d19755b7da901b96dca3d42"),
+    "public": h("ec172b93ad5e563bf4932c70e1245034" "c35467ef2efd4d64ebf819683467e2bf"),
+    "message": h(
+        "ddaf35a193617abacc417349ae204131"
+        "12e6fa4e89a97ea20a9eeee64b55d39a"
+        "2192992a274fc1a836ba3c23a3feebbd"
+        "454d4423643ce80e2a9ac94fa54ca49f"
+    ),
+    "signature": h(
+        "dc2a4459e7369633a52b1bf277839a00"
+        "201009a3efbf3ecb69bea2186c26b589"
+        "09351fc9ac90b3ecfdfbc7c66431e030"
+        "3dca179c138ac17ad9bef1177331a704"
+    ),
 }
 
 RFC8032_CASES = [
-    pytest.param(RFC8032_TEST_1, id='TEST-1-empty-message'),
-    pytest.param(RFC8032_TEST_2, id='TEST-2-one-byte'),
-    pytest.param(RFC8032_TEST_3, id='TEST-3-two-bytes'),
-    pytest.param(RFC8032_TEST_SHA_ABC, id='TEST-SHA-abc'),
+    pytest.param(RFC8032_TEST_1, id="TEST-1-empty-message"),
+    pytest.param(RFC8032_TEST_2, id="TEST-2-one-byte"),
+    pytest.param(RFC8032_TEST_3, id="TEST-3-two-bytes"),
+    pytest.param(RFC8032_TEST_SHA_ABC, id="TEST-SHA-abc"),
 ]
 
 
 class TestEd25519Rfc8032:
-    @pytest.mark.parametrize('case', RFC8032_CASES)
+    @pytest.mark.parametrize("case", RFC8032_CASES)
     def test_public_key_derivation_matches_the_rfc(self, case):
-        assert bytes(SigningKey(case['secret']).verify_key) == case['public']
+        assert bytes(SigningKey(case["secret"]).verify_key) == case["public"]
 
-    @pytest.mark.parametrize('case', RFC8032_CASES)
+    @pytest.mark.parametrize("case", RFC8032_CASES)
     def test_signature_matches_the_rfc(self, case):
         """
         Byte-for-byte, not merely valid.
@@ -377,12 +391,12 @@ class TestEd25519Rfc8032:
         randomised nonce -- is a different scheme, and X3DH's transcript
         signatures would not match what a peer computes.
         """
-        signed = SigningKey(case['secret']).sign(case['message'])
-        assert signed.signature == case['signature']
+        signed = SigningKey(case["secret"]).sign(case["message"])
+        assert signed.signature == case["signature"]
 
-    @pytest.mark.parametrize('case', RFC8032_CASES)
+    @pytest.mark.parametrize("case", RFC8032_CASES)
     def test_the_rfc_signature_verifies(self, case):
-        VerifyKey(case['public']).verify(case['message'], case['signature'])
+        VerifyKey(case["public"]).verify(case["message"], case["signature"])
 
     def test_a_tampered_signature_is_rejected(self):
         """
@@ -390,11 +404,11 @@ class TestEd25519Rfc8032:
         shows the check can fail, which is the property X3DH depends on when it
         refuses a substituted signed prekey.
         """
-        tampered = bytearray(RFC8032_TEST_2['signature'])
+        tampered = bytearray(RFC8032_TEST_2["signature"])
         tampered[0] ^= 0x01
         with pytest.raises(BadSignatureError):
-            VerifyKey(RFC8032_TEST_2['public']).verify(
-                RFC8032_TEST_2['message'], bytes(tampered)
+            VerifyKey(RFC8032_TEST_2["public"]).verify(
+                RFC8032_TEST_2["message"], bytes(tampered)
             )
 
 
@@ -410,6 +424,7 @@ class TestEd25519Rfc8032:
 # and the public halves must correspond to the private halves. A break in any
 # of that would silently break DH1 and DH2 in X3DH.
 
+
 class TestEd25519ToX25519Conversion:
     def test_private_and_public_halves_agree(self):
         """
@@ -419,9 +434,13 @@ class TestEd25519ToX25519Conversion:
         birational map, every handshake would compute DH1 and DH2 with a key
         the other side did not use.
         """
-        for seed in (RFC8032_TEST_1, RFC8032_TEST_2, RFC8032_TEST_3,
-                     RFC8032_TEST_SHA_ABC):
-            signing_key = SigningKey(seed['secret'])
+        for seed in (
+            RFC8032_TEST_1,
+            RFC8032_TEST_2,
+            RFC8032_TEST_3,
+            RFC8032_TEST_SHA_ABC,
+        ):
+            signing_key = SigningKey(seed["secret"])
             private = identity_private_x25519(signing_key)
             derived = identity_public_x25519(signing_key.verify_key)
             assert bytes(private.public_key) == bytes(derived)
@@ -435,22 +454,18 @@ class TestEd25519ToX25519Conversion:
         the other way round. This is the check that would catch an inconsistent
         conversion; it is a self-consistency anchor, not a published vector.
         """
-        alice = SigningKey(RFC8032_TEST_1['secret'])
-        bob = SigningKey(RFC8032_TEST_2['secret'])
+        alice = SigningKey(RFC8032_TEST_1["secret"])
+        bob = SigningKey(RFC8032_TEST_2["secret"])
 
         alice_private = identity_private_x25519(alice)
         bob_private = identity_private_x25519(bob)
         alice_public = identity_public_x25519(alice.verify_key)
         bob_public = identity_public_x25519(bob.verify_key)
 
-        forward = _x25519(
-            bytes(alice_private), bytes(bob_public)
-        )
-        backward = _x25519(
-            bytes(bob_private), bytes(alice_public)
-        )
+        forward = _x25519(bytes(alice_private), bytes(bob_public))
+        backward = _x25519(bytes(bob_private), bytes(alice_public))
         assert forward == backward
-        assert forward != b'\x00' * 32
+        assert forward != b"\x00" * 32
 
 
 # ---------------------------------------------------------------------------
@@ -464,6 +479,7 @@ class TestEd25519ToX25519Conversion:
 # the Double Ratchet specification defines. If someone changes a constant in
 # either, these fail even though the round-trip tests would still pass, because
 # both sides would change together.
+
 
 class TestComposedProtocolsBoundToThePrimitives:
     def test_x3dh_root_key_is_the_documented_hkdf_construction(self):
@@ -496,8 +512,8 @@ class TestComposedProtocolsBoundToThePrimitives:
         values = [
             RFC7748_X25519_1_EXPECTED,
             RFC7748_X25519_2_EXPECTED,
-            RFC8032_TEST_3['public'],
-            RFC8032_TEST_1['public'],
+            RFC8032_TEST_3["public"],
+            RFC8032_TEST_1["public"],
         ]
         # The DH outputs are 32 bytes each and are only checkable as a set of
         # correctly sized values here; the actual DH is covered by the X25519
@@ -506,10 +522,10 @@ class TestComposedProtocolsBoundToThePrimitives:
             assert len(value) == 32
 
         dh_parts = [DhPart(label, value) for label, value in zip(labels, values)]
-        context = b'DecentralizedMessenger-X3DH-v1'
+        context = b"DecentralizedMessenger-X3DH-v1"
         ours = X3DH.derive_master_key(dh_parts, context=context)
         expected = hkdf(
-            salt=b'\x00' * 32,
+            salt=b"\x00" * 32,
             ikm=X25519_F + parts_value(dh_parts),
             info=context,
             length=32,
@@ -528,12 +544,16 @@ class TestComposedProtocolsBoundToThePrimitives:
         from src.crypto.x3dh import LABEL_KEM, DhPart, parts_value
 
         parts = [
-            DhPart(b'A', b'\x01' * 32),
-            DhPart(b'LONGER', b'\x02' * 32),
+            DhPart(b"A", b"\x01" * 32),
+            DhPart(b"LONGER", b"\x02" * 32),
         ]
         expected = (
-            len(b'A').to_bytes(4, 'big') + b'A' + b'\x01' * 32
-            + len(b'LONGER').to_bytes(4, 'big') + b'LONGER' + b'\x02' * 32
+            len(b"A").to_bytes(4, "big")
+            + b"A"
+            + b"\x01" * 32
+            + len(b"LONGER").to_bytes(4, "big")
+            + b"LONGER"
+            + b"\x02" * 32
         )
         assert parts_value(parts) == expected
         assert LABEL_KEM not in expected
@@ -550,14 +570,14 @@ class TestComposedProtocolsBoundToThePrimitives:
         from src.crypto.double_ratchet import DoubleRatchet, HKDF_INFO, KEY_SIZE
 
         ratchet = DoubleRatchet.__new__(DoubleRatchet)
-        root_key = RFC5869_CASE_1['prk']
+        root_key = RFC5869_CASE_1["prk"]
         dh_output = RFC7748_X25519_1_EXPECTED
 
         new_root, new_chain = ratchet._kdf_rk(root_key, dh_output)
         expected = hkdf(
             salt=root_key,
             ikm=dh_output,
-            info=HKDF_INFO + b'\x01',
+            info=HKDF_INFO + b"\x01",
             length=2 * KEY_SIZE,
         )
         assert new_root + new_chain == expected
@@ -580,15 +600,11 @@ class TestComposedProtocolsBoundToThePrimitives:
         from src.crypto.double_ratchet import DoubleRatchet
 
         ratchet = DoubleRatchet.__new__(DoubleRatchet)
-        chain_key = RFC5869_CASE_1['prk']
+        chain_key = RFC5869_CASE_1["prk"]
 
         next_chain_key, message_key = ratchet._kdf_ck(chain_key)
-        assert next_chain_key == hmac.new(
-            chain_key, b'\x01', hashlib.sha256
-        ).digest()
-        assert message_key == hmac.new(
-            chain_key, b'\x02', hashlib.sha256
-        ).digest()
+        assert next_chain_key == hmac.new(chain_key, b"\x01", hashlib.sha256).digest()
+        assert message_key == hmac.new(chain_key, b"\x02", hashlib.sha256).digest()
         assert next_chain_key != message_key
 
 
@@ -608,10 +624,12 @@ class TestComposedProtocolsBoundToThePrimitives:
 # bumping the version reintroduces the exact failure the version check was added
 # to prevent: sessions that load cleanly and then silently fail to decrypt.
 
+
 class TestProtocolConstantsArePinned:
     def test_ratchet_hkdf_info(self):
         from src.crypto.double_ratchet import HKDF_INFO
-        assert HKDF_INFO == b'WhisperRatchet-v2'
+
+        assert HKDF_INFO == b"WhisperRatchet-v2"
 
     def test_ratchet_protocol_version(self):
         """
@@ -624,6 +642,7 @@ class TestProtocolConstantsArePinned:
         else. Such a state has to be refused, not interpreted.
         """
         from src.crypto.double_ratchet import PROTOCOL_VERSION
+
         assert PROTOCOL_VERSION == 3
 
     def test_the_wire_version_is_pinned_separately(self):
@@ -639,6 +658,7 @@ class TestProtocolConstantsArePinned:
         """
         from src.protocol.wire import WIRE_VERSION
         from src.crypto.double_ratchet import PROTOCOL_VERSION
+
         assert WIRE_VERSION == 3
         # They are independent numbers, and the wire one moved twice while the
         # session one moved once. Asserting the inequality would only mean to
@@ -659,11 +679,12 @@ class TestProtocolConstantsArePinned:
             LABEL_IK_SPK,
             LABEL_KEM,
         )
-        assert LABEL_IK_SPK == b'DH1'
-        assert LABEL_EK_IK == b'DH2'
-        assert LABEL_EK_SPK == b'DH3'
-        assert LABEL_EK_OPK == b'DH4'
-        assert LABEL_KEM == b'PQ'
+
+        assert LABEL_IK_SPK == b"DH1"
+        assert LABEL_EK_IK == b"DH2"
+        assert LABEL_EK_SPK == b"DH3"
+        assert LABEL_EK_OPK == b"DH4"
+        assert LABEL_KEM == b"PQ"
         # Distinct, or the separation they provide is not there.
         labels = {LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK, LABEL_KEM}
         assert len(labels) == 5
@@ -684,6 +705,7 @@ class TestProtocolConstantsArePinned:
             PUBLIC_KEY_LEN,
             SHARED_SECRET_LEN,
         )
+
         assert PUBLIC_KEY_LEN == 1184
         assert CIPHERTEXT_LEN == 1088
         assert SHARED_SECRET_LEN == 32
@@ -698,7 +720,8 @@ class TestProtocolConstantsArePinned:
         constant both sides must agree on.
         """
         from src.crypto.x3dh import DEFAULT_CONTEXT
-        assert DEFAULT_CONTEXT == b'DecentralizedMessenger-X3DH-v1'
+
+        assert DEFAULT_CONTEXT == b"DecentralizedMessenger-X3DH-v1"
 
     def test_x3dh_domain_separator_prefix(self):
         """
@@ -707,15 +730,18 @@ class TestProtocolConstantsArePinned:
         This is specified, not chosen, so it is a conformance value.
         """
         from src.crypto.x3dh import X25519_F
-        assert X25519_F == b'\xff' * 32
+
+        assert X25519_F == b"\xff" * 32
 
     def test_initiator_transcript_label(self):
         from src.crypto.x3dh import INIT_TRANSCRIPT_LABEL
-        assert INIT_TRANSCRIPT_LABEL == b'X3DH-init-v1'
+
+        assert INIT_TRANSCRIPT_LABEL == b"X3DH-init-v1"
 
     def test_key_confirmation_info(self):
         from src.crypto.x3dh import KEY_CONFIRMATION_INFO
-        assert KEY_CONFIRMATION_INFO == b'WhisperKeyConfirmation'
+
+        assert KEY_CONFIRMATION_INFO == b"WhisperKeyConfirmation"
 
     def test_x3dh_default_context_is_used_when_none_is_given(self):
         """
@@ -736,16 +762,14 @@ class TestProtocolConstantsArePinned:
         )
 
         parts = [
-            DhPart(label, RFC5869_CASE_1['prk'])
+            DhPart(label, RFC5869_CASE_1["prk"])
             for label in (LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK)
         ]
-        assert (
-            X3DH.derive_master_key(parts)
-            == X3DH.derive_master_key(parts, context=DEFAULT_CONTEXT)
+        assert X3DH.derive_master_key(parts) == X3DH.derive_master_key(
+            parts, context=DEFAULT_CONTEXT
         )
-        assert (
-            X3DH.derive_master_key(parts)
-            != X3DH.derive_master_key(parts, context=b'something else')
+        assert X3DH.derive_master_key(parts) != X3DH.derive_master_key(
+            parts, context=b"something else"
         )
 
 

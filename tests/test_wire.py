@@ -105,7 +105,7 @@ def make_init(with_one_time_prekey=True):
 
 
 class TestVarint:
-    @pytest.mark.parametrize('value', [0, 1, 127, 128, 300, 2 ** 16, 2 ** 32, 2 ** 63])
+    @pytest.mark.parametrize("value", [0, 1, 127, 128, 300, 2**16, 2**32, 2**63])
     def test_round_trip(self, value):
         encoded = encode_varint(value)
         decoded, offset = decode_varint(encoded, 0)
@@ -113,33 +113,33 @@ class TestVarint:
         assert offset == len(encoded)
 
     def test_encoding_is_minimal(self):
-        assert encode_varint(0) == b'\x00'
-        assert encode_varint(1) == b'\x01'
-        assert encode_varint(127) == b'\x7f'
-        assert encode_varint(128) == b'\x80\x01'
-        assert encode_varint(300) == b'\xac\x02'
+        assert encode_varint(0) == b"\x00"
+        assert encode_varint(1) == b"\x01"
+        assert encode_varint(127) == b"\x7f"
+        assert encode_varint(128) == b"\x80\x01"
+        assert encode_varint(300) == b"\xac\x02"
 
     def test_non_canonical_rejected(self):
         # 0 encodes as one byte; two bytes is the same value, so it is refused.
         with pytest.raises(InvalidVarint):
-            decode_varint(b'\x80\x00', 0)
+            decode_varint(b"\x80\x00", 0)
         with pytest.raises(InvalidVarint):
-            decode_varint(b'\x81\x80\x00', 0)
+            decode_varint(b"\x81\x80\x00", 0)
 
     def test_oversized_rejected(self):
         with pytest.raises(InvalidVarint):
-            decode_varint(b'\xff' * 12, 0)
+            decode_varint(b"\xff" * 12, 0)
 
     def test_truncated_rejected(self):
         with pytest.raises(TruncatedFrame):
-            decode_varint(b'\x80', 0)
+            decode_varint(b"\x80", 0)
 
     def test_offset_is_respected(self):
         encoded = encode_varint(9)
-        value, offset = decode_varint(b'\xff' + encoded, 1)
+        value, offset = decode_varint(b"\xff" + encoded, 1)
         assert value == 9 and offset == 2
 
-    @pytest.mark.parametrize('value', [-1, 2 ** 64])
+    @pytest.mark.parametrize("value", [-1, 2**64])
     def test_out_of_range_rejected(self, value):
         with pytest.raises(ValueError):
             encode_varint(value)
@@ -151,7 +151,7 @@ class TestVarint:
 
 class TestFrameHeader:
     def test_short_frame_rejected(self):
-        for data in (b'', b'\x01', b'\x01\x01'):
+        for data in (b"", b"\x01", b"\x01\x01"):
             with pytest.raises(TruncatedFrame):
                 decode_prekey_bundle(data)
 
@@ -178,7 +178,7 @@ class TestFrameHeader:
     def test_oversized_declared_length_rejected_before_allocation(self):
         # Declares a 2**40 byte payload. Must fail on the declaration, not by
         # trying to allocate it.
-        header = bytes((WIRE_VERSION, KIND_PREKEY_BUNDLE)) + encode_varint(2 ** 40)
+        header = bytes((WIRE_VERSION, KIND_PREKEY_BUNDLE)) + encode_varint(2**40)
         with pytest.raises(FrameTooLarge):
             decode_prekey_bundle(header)
 
@@ -193,13 +193,13 @@ class TestFrameHeader:
         _, responder = make_bundle()
         wire = encode_prekey_bundle(publish(responder))
         with pytest.raises(TrailingData):
-            decode_prekey_bundle(wire + b'\x00')
+            decode_prekey_bundle(wire + b"\x00")
 
     def test_trailing_garbage_rejected(self):
         _, responder = make_bundle()
         wire = encode_prekey_bundle(publish(responder))
         with pytest.raises(TrailingData):
-            decode_prekey_bundle(wire + b'junkjunk')
+            decode_prekey_bundle(wire + b"junkjunk")
 
 
 class TestPreKeyBundle:
@@ -226,14 +226,16 @@ class TestPreKeyBundle:
         _, responder = make_bundle()
         wire = bytearray(encode_prekey_bundle(publish(responder)))
         base = payload_offset(bytes(wire))
-        wire[base + 32 + 32 + 63] ^= 0xFF   # last byte of the signature
+        wire[base + 32 + 32 + 63] ^= 0xFF  # last byte of the signature
         decoded = decode_prekey_bundle(bytes(wire))
         with pytest.raises(InvalidSignatureError):
             X3DH.verify_bundle(decoded)
 
     def test_bad_one_time_flag_rejected(self):
         _, responder = make_bundle(False)
-        wire = bytearray(encode_prekey_bundle(publish(responder, with_one_time_prekey=False)))
+        wire = bytearray(
+            encode_prekey_bundle(publish(responder, with_one_time_prekey=False))
+        )
         base = payload_offset(bytes(wire))
         wire[base + 32 + 32 + 64] = 0x02
         with pytest.raises(InvalidField):
@@ -251,9 +253,9 @@ class TestPreKeyBundle:
         read a prekey out of the following field.
         """
         _, responder = make_bundle(False)
-        wire = bytearray(encode_prekey_bundle(
-            publish(responder, with_one_time_prekey=False)
-        ))
+        wire = bytearray(
+            encode_prekey_bundle(publish(responder, with_one_time_prekey=False))
+        )
         base = payload_offset(bytes(wire))
         wire[base + 32 + 32 + 64] = 0x01
         with pytest.raises(WireError):
@@ -279,14 +281,12 @@ class TestPreKeyBundle:
             prekey_store=store,
             pq_prekey_store=InMemoryPQPreKeyStore(),
         )
-        frame = encode_prekey_bundle(
-            responder.publish_bundle(allow_no_pq=True)
-        )
+        frame = encode_prekey_bundle(responder.publish_bundle(allow_no_pq=True))
         length, offset = decode_varint(frame, 2)
         assert length < PQ_PUBLIC_KEY_LEN
         assert frame[offset + length - 1] == 0x00
 
-        payload = bytearray(frame[offset:offset + length])
+        payload = bytearray(frame[offset : offset + length])
         payload[-1] = 0x01
         tampered = frame[:2] + encode_varint(len(payload)) + bytes(payload)
         with pytest.raises(WireError):
@@ -322,7 +322,7 @@ class TestHandshakeInit:
         _, _, init = make_init(True)
         wire = encode_handshake_init(init)
         derived = bytes(identity_public_x25519(init.identity_key))
-        assert derived not in wire, 'x25519 identity key leaked onto the wire'
+        assert derived not in wire, "x25519 identity key leaked onto the wire"
 
         decoded = decode_handshake_init(wire)
         assert bytes(decoded.identity_key_x25519) == derived
@@ -336,18 +336,18 @@ class TestHandshakeInit:
         """
         _, _, init = make_init(True)
         wire = bytearray(encode_handshake_init(init))
-        wire[payload_offset(bytes(wire))] ^= 0xFF      # identity_key
+        wire[payload_offset(bytes(wire))] ^= 0xFF  # identity_key
         try:
             decoded = decode_handshake_init(bytes(wire))
         except WireError:
-            return                                        # refused outright
+            return  # refused outright
         with pytest.raises(InvalidSignatureError):
             decoded.verify()
 
     def test_tampered_ephemeral_key_breaks_verification(self):
         _, _, init = make_init(True)
         wire = bytearray(encode_handshake_init(init))
-        wire[payload_offset(bytes(wire)) + KEY_LEN] ^= 0xFF   # ephemeral_key
+        wire[payload_offset(bytes(wire)) + KEY_LEN] ^= 0xFF  # ephemeral_key
         decoded = decode_handshake_init(bytes(wire))
         with pytest.raises(InvalidSignatureError):
             decoded.verify()
@@ -356,7 +356,7 @@ class TestHandshakeInit:
         _, _, init = make_init(True)
         wire = bytearray(encode_handshake_init(init))
         base = payload_offset(bytes(wire))
-        wire[base + 2 * KEY_LEN + 63] ^= 0xFF          # signature
+        wire[base + 2 * KEY_LEN + 63] ^= 0xFF  # signature
         decoded = decode_handshake_init(bytes(wire))
         with pytest.raises(InvalidSignatureError):
             decoded.verify()
@@ -372,40 +372,46 @@ class TestHandshakeInit:
 class TestRatchetMessage:
     def _header(self):
         return {
-            'dh': PrivateKey.generate().public_key.__bytes__().hex(),
-            'pn': 0,
-            'n': 7,
+            "dh": PrivateKey.generate().public_key.__bytes__().hex(),
+            "pn": 0,
+            "n": 7,
         }
 
     def test_round_trip(self):
         header = self._header()
-        ciphertext = b'\x00' * 64
+        ciphertext = b"\x00" * 64
         wire = encode_ratchet_message(ciphertext, header)
         message = decode_ratchet_message(wire)
-        assert message.dh.hex() == header['dh']
+        assert message.dh.hex() == header["dh"]
         assert message.pn == 0
         assert message.n == 7
         assert message.ciphertext == ciphertext
         assert message.to_header() == header
 
     def test_large_counters_round_trip(self):
-        header = dict(self._header(), pn=2 ** 31, n=2 ** 32 - 1)
-        message = decode_ratchet_message(encode_ratchet_message(b'\x00' * 40, header))
-        assert message.pn == 2 ** 31
-        assert message.n == 2 ** 32 - 1
+        header = dict(self._header(), pn=2**31, n=2**32 - 1)
+        message = decode_ratchet_message(encode_ratchet_message(b"\x00" * 40, header))
+        assert message.pn == 2**31
+        assert message.n == 2**32 - 1
 
-    @pytest.mark.parametrize('field,value', [
-        ('pn', -1), ('pn', 2 ** 32), ('n', -1), ('n', 2 ** 32),
-    ])
+    @pytest.mark.parametrize(
+        "field,value",
+        [
+            ("pn", -1),
+            ("pn", 2**32),
+            ("n", -1),
+            ("n", 2**32),
+        ],
+    )
     def test_out_of_range_counter_rejected(self, field, value):
         with pytest.raises(InvalidField):
-            encode_ratchet_message(b'\x00' * 40, dict(self._header(), **{field: value}))
+            encode_ratchet_message(b"\x00" * 40, dict(self._header(), **{field: value}))
 
     def test_bad_dh_rejected(self):
         with pytest.raises(InvalidField):
-            encode_ratchet_message(b'\x00' * 40, dict(self._header(), dh='abcd'))
+            encode_ratchet_message(b"\x00" * 40, dict(self._header(), dh="abcd"))
         with pytest.raises(InvalidField):
-            encode_ratchet_message(b'\x00' * 40, dict(self._header(), dh='zz' * 32))
+            encode_ratchet_message(b"\x00" * 40, dict(self._header(), dh="zz" * 32))
 
     def test_short_ciphertext_rejected(self):
         """
@@ -417,16 +423,16 @@ class TestRatchetMessage:
         through a ciphertext that the ratchet would later reject with a much
         less useful message.
         """
-        wire = encode_ratchet_message(b'\x00' * 8, self._header())
+        wire = encode_ratchet_message(b"\x00" * 8, self._header())
         with pytest.raises(InvalidField):
             decode_ratchet_message(wire)
         # And exactly at the minimum it is accepted, so the bound is not
         # off by one in the cautious direction.
-        accepted = encode_ratchet_message(b'\x00' * 40, self._header())
+        accepted = encode_ratchet_message(b"\x00" * 40, self._header())
         assert len(decode_ratchet_message(accepted).ciphertext) == 40
 
     def test_truncation_at_every_offset_rejected(self):
-        wire = encode_ratchet_message(b'\x00' * 64, self._header())
+        wire = encode_ratchet_message(b"\x00" * 64, self._header())
         for cut in range(len(wire)):
             with pytest.raises(WireError):
                 decode_ratchet_message(wire[:cut])
@@ -436,8 +442,12 @@ class TestRatchetMessage:
         A peer that pads its varints could otherwise produce a second encoding
         of the same header, and the header is authenticated as associated data.
         """
-        payload = PrivateKey.generate().public_key.__bytes__() + b'\x80\x00' + b'\x00'
-        wire = bytes((WIRE_VERSION, KIND_RATCHET_MESSAGE)) + encode_varint(len(payload)) + payload
+        payload = PrivateKey.generate().public_key.__bytes__() + b"\x80\x00" + b"\x00"
+        wire = (
+            bytes((WIRE_VERSION, KIND_RATCHET_MESSAGE))
+            + encode_varint(len(payload))
+            + payload
+        )
         with pytest.raises(WireError):
             decode_ratchet_message(wire)
 
@@ -445,13 +455,15 @@ class TestRatchetMessage:
 class TestKeyConfirmationWire:
     def _confirmation(self):
         from src.crypto.x3dh import KeyConfirmation
+
         return KeyConfirmation(
             ephemeral_key=PrivateKey.generate().public_key,
-            mac=b'\x5a' * 32,
+            mac=b"\x5a" * 32,
         )
 
     def test_round_trip(self):
         from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+
         confirmation = self._confirmation()
         wire = encode_key_confirmation(confirmation)
         decoded = decode_key_confirmation(wire)
@@ -460,6 +472,7 @@ class TestKeyConfirmationWire:
 
     def test_truncation_rejected(self):
         from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+
         wire = encode_key_confirmation(self._confirmation())
         for cut in range(len(wire)):
             with pytest.raises(WireError):
@@ -467,9 +480,10 @@ class TestKeyConfirmationWire:
 
     def test_trailing_data_rejected(self):
         from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+
         wire = encode_key_confirmation(self._confirmation())
         with pytest.raises(TrailingData):
-            decode_key_confirmation(wire + b'\x00')
+            decode_key_confirmation(wire + b"\x00")
 
     def test_tampered_mac_decodes_but_fails_verification(self):
         """
@@ -479,6 +493,7 @@ class TestKeyConfirmationWire:
         must instead be caught by verify_key_confirmation.
         """
         from src.protocol.wire import decode_key_confirmation, encode_key_confirmation
+
         wire = bytearray(encode_key_confirmation(self._confirmation()))
         wire[payload_offset(bytes(wire)) + 32] ^= 0xFF
         decoded = decode_key_confirmation(bytes(wire))
@@ -486,6 +501,7 @@ class TestKeyConfirmationWire:
 
     def test_included_in_total_function_corpus(self):
         from src.protocol.wire import decode_key_confirmation
+
         rng = random.Random(99)
         for _ in range(500):
             blob = bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 70)))
@@ -516,8 +532,12 @@ class TestUntrustedInput:
             encode_prekey_bundle(publish(responder)),
             encode_handshake_init(init),
             encode_ratchet_message(
-                b'\x00' * 64,
-                {'dh': PrivateKey.generate().public_key.__bytes__().hex(), 'pn': 0, 'n': 1},
+                b"\x00" * 64,
+                {
+                    "dh": PrivateKey.generate().public_key.__bytes__().hex(),
+                    "pn": 0,
+                    "n": 1,
+                },
             ),
         ]
         rng = random.Random(7)
@@ -542,8 +562,12 @@ class TestUntrustedInput:
         assert decode_handshake_init(encode_handshake_init(init))
         assert decode_ratchet_message(
             encode_ratchet_message(
-                b'\x00' * 64,
-                {'dh': PrivateKey.generate().public_key.__bytes__().hex(), 'pn': 0, 'n': 1},
+                b"\x00" * 64,
+                {
+                    "dh": PrivateKey.generate().public_key.__bytes__().hex(),
+                    "pn": 0,
+                    "n": 1,
+                },
             )
         )
 

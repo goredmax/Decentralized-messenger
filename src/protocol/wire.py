@@ -34,7 +34,7 @@ bytes, and the first byte alone selects the format version.
 
 from dataclasses import dataclass
 import os
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 from ..crypto.double_ratchet import PROTOCOL_VERSION
 from ..crypto.x3dh import (
@@ -80,7 +80,7 @@ PQ_CIPHERTEXT_LEN = 1088
 KEY_LEN = 32
 SIG_LEN = 64
 _MAC_LEN = 32
-_UINT32_MAX = 2 ** 32
+_UINT32_MAX = 2**32
 _UINT64_MAX = (1 << 64) - 1
 
 #: AEAD framing inside a ratchet message. A ciphertext shorter than nonce plus
@@ -127,6 +127,7 @@ class InvalidField(WireError):
 # varint
 # ---------------------------------------------------------------------------
 
+
 def encode_varint(value: int) -> bytes:
     """
     Encode an unsigned integer as a canonical LEB128 varint.
@@ -135,9 +136,9 @@ def encode_varint(value: int) -> bytes:
         ValueError: negative or larger than 2**64-1.
     """
     if not isinstance(value, int) or isinstance(value, bool):
-        raise TypeError('varint value must be an int')
+        raise TypeError("varint value must be an int")
     if value < 0 or value > _UINT64_MAX:
-        raise ValueError(f'varint out of range: {value}')
+        raise ValueError(f"varint out of range: {value}")
     out = bytearray()
     while True:
         byte = value & 0x7F
@@ -166,7 +167,7 @@ def decode_varint(buf: bytes, offset: int) -> Tuple[int, int]:
     last_byte = 0
     while True:
         if offset >= len(buf):
-            raise TruncatedFrame('varint runs past end of input')
+            raise TruncatedFrame("varint runs past end of input")
         last_byte = buf[offset]
         offset += 1
         result |= (last_byte & 0x7F) << shift
@@ -174,10 +175,10 @@ def decode_varint(buf: bytes, offset: int) -> Tuple[int, int]:
             break
         shift += 7
         if shift > MAX_VARINT_SHIFT:
-            raise InvalidVarint('varint longer than 64 bits')
+            raise InvalidVarint("varint longer than 64 bits")
     if offset - start > 1 and last_byte == 0x00:
         # e.g. 0x80 0x00 encodes 0 in two bytes; the canonical form is 0x00.
-        raise InvalidVarint('non-canonical varint: redundant trailing byte')
+        raise InvalidVarint("non-canonical varint: redundant trailing byte")
     return result, offset
 
 
@@ -185,19 +186,18 @@ def decode_varint(buf: bytes, offset: int) -> Tuple[int, int]:
 # primitives
 # ---------------------------------------------------------------------------
 
+
 def _read_exact(buf: bytes, offset: int, count: int, what: str) -> Tuple[bytes, int]:
     end = offset + count
     if end > len(buf):
-        raise TruncatedFrame(
-            f'need {count} bytes for {what}, have {len(buf) - offset}'
-        )
+        raise TruncatedFrame(f"need {count} bytes for {what}, have {len(buf) - offset}")
     return buf[offset:end], end
 
 
 def _encode_frame(kind: int, payload: bytes) -> bytes:
     if len(payload) > MAX_FRAME_BYTES:
         raise FrameTooLarge(
-            f'payload of {len(payload)} bytes exceeds {MAX_FRAME_BYTES}'
+            f"payload of {len(payload)} bytes exceeds {MAX_FRAME_BYTES}"
         )
     return bytes((WIRE_VERSION, kind)) + encode_varint(len(payload)) + payload
 
@@ -213,28 +213,26 @@ def _decode_header(buf: bytes, expected_kinds: Tuple[int, ...]) -> Tuple[int, in
         TruncatedFrame, UnsupportedVersion, UnknownMessageKind, FrameTooLarge
     """
     if len(buf) < 3:
-        raise TruncatedFrame('frame shorter than its header')
+        raise TruncatedFrame("frame shorter than its header")
     version = buf[0]
     if version != WIRE_VERSION:
-        raise UnsupportedVersion(
-            f'wire version {version} != {WIRE_VERSION}'
-        )
+        raise UnsupportedVersion(f"wire version {version} != {WIRE_VERSION}")
     kind = buf[1]
     if kind not in expected_kinds:
-        raise UnknownMessageKind(f'unknown message kind 0x{kind:02x}')
+        raise UnknownMessageKind(f"unknown message kind 0x{kind:02x}")
     length, offset = decode_varint(buf, 2)
     if length > MAX_FRAME_BYTES:
         raise FrameTooLarge(
-            f'declared payload of {length} bytes exceeds {MAX_FRAME_BYTES}'
+            f"declared payload of {length} bytes exceeds {MAX_FRAME_BYTES}"
         )
     return kind, offset
 
 
 def _extract_payload(buf: bytes, offset: int) -> bytes:
     length, offset = decode_varint(buf, 2)
-    payload, end = _read_exact(buf, offset, length, 'payload')
+    payload, end = _read_exact(buf, offset, length, "payload")
     if end != len(buf):
-        raise TrailingData(f'{len(buf) - end} unexpected trailing bytes')
+        raise TrailingData(f"{len(buf) - end} unexpected trailing bytes")
     return payload
 
 
@@ -251,6 +249,7 @@ KIND_KEY_CONFIRMATION = 0x04
 # ---------------------------------------------------------------------------
 # PreKeyBundle
 # ---------------------------------------------------------------------------
+
 
 def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
     """
@@ -273,14 +272,15 @@ def encode_prekey_bundle(bundle: PreKeyBundle) -> bytes:
     else:
         payload.append(0x01)
         payload += bytes(bundle.one_time_prekey)
-        payload += encode_varint(bundle.one_time_prekey_id)
+        # __post_init__ enforces that the id is set together with the key.
+        payload += encode_varint(cast(int, bundle.one_time_prekey_id))
     payload += encode_varint(bundle.signed_prekey_id)
     if bundle.pq_prekey is None:
         payload.append(0x00)
     else:
         payload.append(0x01)
         payload += bundle.pq_prekey.public_bytes_raw()
-        payload += encode_varint(bundle.pq_prekey_id)
+        payload += encode_varint(cast(int, bundle.pq_prekey_id))
     return _encode_frame(KIND_PREKEY_BUNDLE, bytes(payload))
 
 
@@ -300,41 +300,39 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
     expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
-            f'bundle payload of {len(payload)} bytes, minimum {expected_min}'
+            f"bundle payload of {len(payload)} bytes, minimum {expected_min}"
         )
 
     offset = 0
-    identity_key, offset = _read_exact(payload, offset, KEY_LEN, 'identity_key')
-    signed_prekey, offset = _read_exact(payload, offset, KEY_LEN, 'signed_prekey')
-    signature, offset = _read_exact(payload, offset, SIG_LEN, 'signature')
+    identity_key, offset = _read_exact(payload, offset, KEY_LEN, "identity_key")
+    signed_prekey, offset = _read_exact(payload, offset, KEY_LEN, "signed_prekey")
+    signature, offset = _read_exact(payload, offset, SIG_LEN, "signature")
 
     has_one_time = payload[offset]
     offset += 1
     if has_one_time not in (0x00, 0x01):
-        raise InvalidField(f'one_time_prekey flag must be 0 or 1, got {has_one_time}')
+        raise InvalidField(f"one_time_prekey flag must be 0 or 1, got {has_one_time}")
 
     one_time_prekey = None
     one_time_prekey_id = None
     if has_one_time:
-        raw, offset = _read_exact(payload, offset, KEY_LEN, 'one_time_prekey')
+        raw, offset = _read_exact(payload, offset, KEY_LEN, "one_time_prekey")
         one_time_prekey = PublicKey(raw)
         one_time_prekey_id, offset = decode_varint(payload, offset)
         if one_time_prekey_id > _UINT64_MAX:
-            raise InvalidVarint('one_time_prekey_id out of range')
+            raise InvalidVarint("one_time_prekey_id out of range")
 
     signed_prekey_id, offset = decode_varint(payload, offset)
 
     has_pq = payload[offset]
     offset += 1
     if has_pq not in (0x00, 0x01):
-        raise InvalidField(f'pq_prekey flag must be 0 or 1, got {has_pq}')
+        raise InvalidField(f"pq_prekey flag must be 0 or 1, got {has_pq}")
 
     pq_prekey = None
     pq_prekey_id = None
     if has_pq:
-        raw, offset = _read_exact(
-            payload, offset, PQ_PUBLIC_KEY_LEN, 'pq_prekey'
-        )
+        raw, offset = _read_exact(payload, offset, PQ_PUBLIC_KEY_LEN, "pq_prekey")
         # Loaded through the pq module, which checks the length and the type.
         # A DER SPKI would be the wrong choice here: load_der_public_key accepts
         # an Ed25519 or X25519 SPKI and returns that type instead, so a bundle
@@ -343,13 +341,13 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
         try:
             pq_prekey = load_pq_public_key(raw)
         except PQError as exc:
-            raise InvalidField(f'pq_prekey is not usable: {exc}') from exc
+            raise InvalidField(f"pq_prekey is not usable: {exc}") from exc
         pq_prekey_id, offset = decode_varint(payload, offset)
         if pq_prekey_id > _UINT64_MAX:
-            raise InvalidVarint('pq_prekey_id out of range')
+            raise InvalidVarint("pq_prekey_id out of range")
 
     if offset != len(payload):
-        raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
+        raise TrailingData(f"{len(payload) - offset} unexpected trailing bytes")
 
     try:
         return PreKeyBundle(
@@ -363,12 +361,13 @@ def decode_prekey_bundle(data: bytes) -> PreKeyBundle:
             pq_prekey_id=pq_prekey_id,
         )
     except BadSignatureError as exc:  # pragma: no cover - guarded above
-        raise InvalidField('malformed key material') from exc
+        raise InvalidField("malformed key material") from exc
 
 
 # ---------------------------------------------------------------------------
 # HandshakeInit
 # ---------------------------------------------------------------------------
+
 
 def encode_handshake_init(init: HandshakeInit) -> bytes:
     """
@@ -397,7 +396,8 @@ def encode_handshake_init(init: HandshakeInit) -> bytes:
     else:
         payload.append(0x01)
         payload += init.pq_ciphertext
-        payload += encode_varint(init.pq_prekey_id)
+        # __post_init__ enforces that the id is set together with the ciphertext.
+        payload += encode_varint(cast(int, init.pq_prekey_id))
     return _encode_frame(KIND_HANDSHAKE_INIT, bytes(payload))
 
 
@@ -416,18 +416,18 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
     expected_min = KEY_LEN + KEY_LEN + SIG_LEN + 1 + 1
     if len(payload) < expected_min:
         raise TruncatedFrame(
-            f'handshake payload of {len(payload)} bytes, minimum {expected_min}'
+            f"handshake payload of {len(payload)} bytes, minimum {expected_min}"
         )
 
     offset = 0
-    identity_key, offset = _read_exact(payload, offset, KEY_LEN, 'identity_key')
-    ephemeral_key, offset = _read_exact(payload, offset, KEY_LEN, 'ephemeral_key')
-    signature, offset = _read_exact(payload, offset, SIG_LEN, 'signature')
+    identity_key, offset = _read_exact(payload, offset, KEY_LEN, "identity_key")
+    ephemeral_key, offset = _read_exact(payload, offset, KEY_LEN, "ephemeral_key")
+    signature, offset = _read_exact(payload, offset, SIG_LEN, "signature")
 
     has_opk = payload[offset]
     offset += 1
     if has_opk not in (0x00, 0x01):
-        raise InvalidField(f'one_time_prekey flag must be 0 or 1, got {has_opk}')
+        raise InvalidField(f"one_time_prekey flag must be 0 or 1, got {has_opk}")
 
     one_time_prekey_id = None
     if has_opk:
@@ -436,21 +436,19 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
     has_pq = payload[offset]
     offset += 1
     if has_pq not in (0x00, 0x01):
-        raise InvalidField(f'pq_ciphertext flag must be 0 or 1, got {has_pq}')
+        raise InvalidField(f"pq_ciphertext flag must be 0 or 1, got {has_pq}")
 
     pq_ciphertext = None
     pq_prekey_id = None
     if has_pq:
-        raw, offset = _read_exact(
-            payload, offset, PQ_CIPHERTEXT_LEN, 'pq_ciphertext'
-        )
+        raw, offset = _read_exact(payload, offset, PQ_CIPHERTEXT_LEN, "pq_ciphertext")
         pq_ciphertext = raw
         pq_prekey_id, offset = decode_varint(payload, offset)
         if pq_prekey_id > _UINT64_MAX:
-            raise InvalidVarint('pq_prekey_id out of range')
+            raise InvalidVarint("pq_prekey_id out of range")
 
     if offset != len(payload):
-        raise TrailingData(f'{len(payload) - offset} unexpected trailing bytes')
+        raise TrailingData(f"{len(payload) - offset} unexpected trailing bytes")
 
     verify_key = VerifyKey(identity_key)
     try:
@@ -460,7 +458,7 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
         # libsodium signals that with its own exception types. Untrusted input
         # must not get to choose which exception escapes, so it all becomes
         # InvalidField.
-        raise InvalidField('identity_key is not a usable Ed25519 point') from exc
+        raise InvalidField("identity_key is not a usable Ed25519 point") from exc
 
     try:
         return HandshakeInit(
@@ -476,12 +474,13 @@ def decode_handshake_init(data: bytes) -> HandshakeInit:
     except PQError as exc:
         # Length disagreement between the encoder's constant and the dataclass's
         # check, or a hostile id. Either way the frame is unusable.
-        raise InvalidField(f'malformed handshake: {exc}') from exc
+        raise InvalidField(f"malformed handshake: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
 # ratchet message
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class WireMessage:
@@ -505,7 +504,7 @@ class WireMessage:
 
     def to_header(self) -> dict:
         """Return the header dict the ratchet expects."""
-        return {'dh': self.dh.hex(), 'pn': self.pn, 'n': self.n}
+        return {"dh": self.dh.hex(), "pn": self.pn, "n": self.n}
 
 
 def _quantised_payload_length(target: int, minimum: int) -> int:
@@ -533,15 +532,16 @@ def _quantised_payload_length(target: int, minimum: int) -> int:
         if len(encode_varint(payload_length)) == width:
             if payload_length < minimum:
                 raise FrameTooLarge(
-                    f'frame target of {target} bytes leaves {payload_length} for '
-                    f'the payload, below the {minimum} this message needs'
+                    f"frame target of {target} bytes leaves {payload_length} for "
+                    f"the payload, below the {minimum} this message needs"
                 )
             return payload_length
-    raise FrameTooLarge(f'no frame of exactly {target} bytes can be built')
+    raise FrameTooLarge(f"no frame of exactly {target} bytes can be built")
 
 
-def encode_ratchet_message(ciphertext: bytes, header: dict,
-                           profile: Optional[PaddingProfile] = None) -> bytes:
+def encode_ratchet_message(
+    ciphertext: bytes, header: dict, profile: Optional[PaddingProfile] = None
+) -> bytes:
     """
     Encode ``nonce || ciphertext`` together with its header.
 
@@ -576,29 +576,29 @@ def encode_ratchet_message(ciphertext: bytes, header: dict,
     if profile is None:
         profile = DEFAULT_PROFILE
 
-    dh_hex = header.get('dh')
+    dh_hex = header.get("dh")
     if not isinstance(dh_hex, str) or len(dh_hex) != KEY_LEN * 2:
-        raise InvalidField('header dh must be 32-byte hex')
+        raise InvalidField("header dh must be 32-byte hex")
     try:
         dh = bytes.fromhex(dh_hex)
     except ValueError as exc:
-        raise InvalidField('header dh is not valid hex') from exc
+        raise InvalidField("header dh is not valid hex") from exc
 
-    for name in ('pn', 'n'):
+    for name in ("pn", "n"):
         value = header.get(name)
         if not isinstance(value, int) or isinstance(value, bool):
-            raise InvalidField(f'header {name} must be an int')
+            raise InvalidField(f"header {name} must be an int")
         if not 0 <= value < _UINT32_MAX:
-            raise InvalidField(f'header {name} out of range')
+            raise InvalidField(f"header {name} out of range")
 
     if not isinstance(ciphertext, (bytes, bytearray, memoryview)):
-        raise InvalidField('ciphertext must be bytes')
+        raise InvalidField("ciphertext must be bytes")
     ciphertext = bytes(ciphertext)
 
     prefix = (
         dh
-        + encode_varint(header['pn'])
-        + encode_varint(header['n'])
+        + encode_varint(header["pn"])
+        + encode_varint(header["n"])
         + encode_varint(len(ciphertext))
     )
     content = len(prefix) + len(ciphertext)
@@ -611,8 +611,8 @@ def encode_ratchet_message(ciphertext: bytes, header: dict,
     target_payload = profile.frame_payload_length(content)
     if target_payload < content:  # pragma: no cover - the ladder guarantees it
         raise FrameTooLarge(
-            f'padded payload of {target_payload} is smaller than the {content} '
-            f'bytes of message'
+            f"padded payload of {target_payload} is smaller than the {content} "
+            f"bytes of message"
         )
     fill = os.urandom(target_payload - content)
     return _encode_frame(KIND_RATCHET_MESSAGE, prefix + ciphertext + fill)
@@ -639,18 +639,18 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
     minimum = KEY_LEN + 3 + _MIN_CIPHERTEXT
     if len(payload) < minimum:
         raise TruncatedFrame(
-            f'ratchet payload of {len(payload)} bytes, minimum {minimum}'
+            f"ratchet payload of {len(payload)} bytes, minimum {minimum}"
         )
 
     offset = 0
-    dh, offset = _read_exact(payload, offset, KEY_LEN, 'header dh')
+    dh, offset = _read_exact(payload, offset, KEY_LEN, "header dh")
     pn, offset = decode_varint(payload, offset)
     n, offset = decode_varint(payload, offset)
     ciphertext_length, offset = decode_varint(payload, offset)
     if pn > _UINT32_MAX or n > _UINT32_MAX:
-        raise InvalidField('header counter exceeds 32 bits')
+        raise InvalidField("header counter exceeds 32 bits")
     if ciphertext_length > _UINT32_MAX:
-        raise InvalidField('ciphertext length exceeds 32 bits')
+        raise InvalidField("ciphertext length exceeds 32 bits")
     if ciphertext_length < _MIN_CIPHERTEXT:
         # Checked against the declared ciphertext, not the payload. A padded
         # frame is large whatever it carries, so a length check on the frame
@@ -658,20 +658,16 @@ def decode_ratchet_message(data: bytes) -> WireMessage:
         # failure would surface later as a confusing AEAD error instead of
         # here.
         raise InvalidField(
-            f'ciphertext of {ciphertext_length} bytes cannot hold a '
-            f'{_NONCE_LEN}-byte nonce and a {_TAG_LEN}-byte tag'
+            f"ciphertext of {ciphertext_length} bytes cannot hold a "
+            f"{_NONCE_LEN}-byte nonce and a {_TAG_LEN}-byte tag"
         )
 
-    ciphertext, end = _read_exact(
-        payload, offset, ciphertext_length, 'ciphertext'
-    )
+    ciphertext, end = _read_exact(payload, offset, ciphertext_length, "ciphertext")
     # Anything left is the length padding the sender added to quantise the
     # frame. Not an error if present, and not required to be.
     if end > len(payload):  # pragma: no cover - _read_exact already checks
-        raise TruncatedFrame('ciphertext runs past the end of the frame')
-    return WireMessage(
-        dh=dh, pn=pn, n=n, ciphertext=bytes(ciphertext)
-    )
+        raise TruncatedFrame("ciphertext runs past the end of the frame")
+    return WireMessage(dh=dh, pn=pn, n=n, ciphertext=bytes(ciphertext))
 
 
 def protocol_version() -> int:
@@ -682,6 +678,7 @@ def protocol_version() -> int:
 # ---------------------------------------------------------------------------
 # key confirmation
 # ---------------------------------------------------------------------------
+
 
 def encode_key_confirmation(confirmation: KeyConfirmation) -> bytes:
     """
@@ -709,7 +706,7 @@ def decode_key_confirmation(data: bytes) -> KeyConfirmation:
     expected = KEY_LEN + _MAC_LEN
     if len(payload) != expected:
         raise TruncatedFrame(
-            f'confirmation payload of {len(payload)} bytes, expected {expected}'
+            f"confirmation payload of {len(payload)} bytes, expected {expected}"
         )
 
     try:
@@ -720,4 +717,4 @@ def decode_key_confirmation(data: bytes) -> KeyConfirmation:
     except KeyConfirmationFailed as exc:
         # Structural validation only; KeyConfirmation.__post_init__ re-checks
         # the lengths, which the slice above already guarantees.
-        raise InvalidField('malformed key confirmation') from exc
+        raise InvalidField("malformed key confirmation") from exc

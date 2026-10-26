@@ -89,14 +89,14 @@ TRANSPARENCY_LABEL = b"DecentralizedMessenger-Transparency-v1"
 
 #: The ``previous`` hash of the first entry. All zero rather than empty, so an
 #: entry can never claim to point at nothing by carrying an empty hash.
-GENESIS = b'\x00' * 32
+GENESIS = b"\x00" * 32
 
 _HASH_LEN = 32
 _SIG_LEN = 64
 
 
 def _u32(value: int) -> bytes:
-    return value.to_bytes(4, 'big')
+    return value.to_bytes(4, "big")
 
 
 class TransparencyError(Exception):
@@ -150,7 +150,7 @@ def _signed_bytes(
     return length_prefixed(
         TRANSPARENCY_LABEL,
         _u32(index),
-        key_id.group_id.encode('utf-8'),
+        key_id.group_id.encode("utf-8"),
         bytes(key_id.sender),
         bytes(chain_id),
         _u32(iteration),
@@ -177,29 +177,38 @@ class LogEntry:
 
     def __post_init__(self) -> None:
         if isinstance(self.index, bool) or not isinstance(self.index, int):
-            raise LogFormatError('index must be an int')
+            raise LogFormatError("index must be an int")
         if self.index < 0:
-            raise LogFormatError(f'index must not be negative: {self.index}')
+            raise LogFormatError(f"index must not be negative: {self.index}")
         if not isinstance(self.key_id, SenderKeyId):
-            raise LogFormatError('key_id must be a SenderKeyId')
-        if not isinstance(self.chain_id, (bytes, bytearray)) or \
-                len(self.chain_id) != _HASH_LEN:
-            raise LogFormatError(f'chain_id must be {_HASH_LEN} bytes')
+            raise LogFormatError("key_id must be a SenderKeyId")
+        if (
+            not isinstance(self.chain_id, (bytes, bytearray))
+            or len(self.chain_id) != _HASH_LEN
+        ):
+            raise LogFormatError(f"chain_id must be {_HASH_LEN} bytes")
         if isinstance(self.iteration, bool) or not isinstance(self.iteration, int):
-            raise LogFormatError('iteration must be an int')
+            raise LogFormatError("iteration must be an int")
         if self.iteration < 0:
-            raise LogFormatError('iteration must not be negative')
-        if not isinstance(self.previous, (bytes, bytearray)) or \
-                len(self.previous) != _HASH_LEN:
-            raise LogFormatError(f'previous must be {_HASH_LEN} bytes')
-        if not isinstance(self.signature, (bytes, bytearray)) or \
-                len(self.signature) != _SIG_LEN:
-            raise LogFormatError(f'signature must be {_SIG_LEN} bytes')
+            raise LogFormatError("iteration must not be negative")
+        if (
+            not isinstance(self.previous, (bytes, bytearray))
+            or len(self.previous) != _HASH_LEN
+        ):
+            raise LogFormatError(f"previous must be {_HASH_LEN} bytes")
+        if (
+            not isinstance(self.signature, (bytes, bytearray))
+            or len(self.signature) != _SIG_LEN
+        ):
+            raise LogFormatError(f"signature must be {_SIG_LEN} bytes")
 
     def signed_bytes(self) -> bytes:
         """The bytes this entry's signature and hash cover."""
         return _signed_bytes(
-            self.index, self.key_id, self.chain_id, self.iteration,
+            self.index,
+            self.key_id,
+            self.chain_id,
+            self.iteration,
             self.previous,
         )
 
@@ -207,7 +216,7 @@ class LogEntry:
         """What the next entry commits to."""
         return hashlib.sha256(self.signed_bytes()).digest()
 
-    def sign(self, identity_key: SigningKey) -> 'LogEntry':
+    def sign(self, identity_key: SigningKey) -> "LogEntry":
         """
         Sign with the sender's own identity key.
 
@@ -221,12 +230,15 @@ class LogEntry:
         """
         if bytes(identity_key.verify_key) != bytes(self.key_id.sender):
             raise LogFormatError(
-                'the log entry names a different sender than the signing key'
+                "the log entry names a different sender than the signing key"
             )
         signature = identity_key.sign(self.signed_bytes()).signature
         return LogEntry(
-            index=self.index, key_id=self.key_id, chain_id=self.chain_id,
-            iteration=self.iteration, previous=self.previous,
+            index=self.index,
+            key_id=self.key_id,
+            chain_id=self.chain_id,
+            iteration=self.iteration,
+            previous=self.previous,
             signature=signature,
         )
 
@@ -241,7 +253,7 @@ class LogEntry:
             self.key_id.sender.verify(self.signed_bytes(), self.signature)
         except BadSignatureError as exc:
             raise LogSignatureError(
-                f'log entry {self.index} is not signed by the sender it names'
+                f"log entry {self.index} is not signed by the sender it names"
             ) from exc
 
 
@@ -287,9 +299,12 @@ class TransparencyLog:
         """
         previous = self.head_hash()
         unsigned = LogEntry(
-            index=len(self._entries), key_id=key_id, chain_id=chain_id,
-            iteration=iteration, previous=previous,
-            signature=b'\x00' * _SIG_LEN,
+            index=len(self._entries),
+            key_id=key_id,
+            chain_id=chain_id,
+            iteration=iteration,
+            previous=previous,
+            signature=b"\x00" * _SIG_LEN,
         )
         signed = unsigned.sign(identity_key)
         self._entries.append(signed)
@@ -315,7 +330,7 @@ class TransparencyLog:
         )
 
     @classmethod
-    def from_entries(cls, entries: Iterable[LogEntry]) -> 'TransparencyLog':
+    def from_entries(cls, entries: Iterable[LogEntry]) -> "TransparencyLog":
         """
         Build a log from entries a client was handed.
 
@@ -333,14 +348,14 @@ class TransparencyLog:
         for position, entry in enumerate(entries):
             if entry.index != position:
                 raise LogLinkError(
-                    f'entry at position {position} claims index {entry.index}'
+                    f"entry at position {position} claims index {entry.index}"
                 )
             entry.verify()
         previous = GENESIS
         for entry in entries:
             if entry.previous != previous:
                 raise LogLinkError(
-                    f'entry {entry.index} does not link to the entry before it'
+                    f"entry {entry.index} does not link to the entry before it"
                 )
             previous = entry.hash()
         log._entries = entries
@@ -385,10 +400,7 @@ class TransparencyLog:
 
     def chains_for(self, key_id: SenderKeyId) -> List[bytes]:
         """Every chain id this log has ever seen from a sender, in order."""
-        return [
-            entry.chain_id for entry in self._entries
-            if entry.key_id == key_id
-        ]
+        return [entry.chain_id for entry in self._entries if entry.key_id == key_id]
 
     # ------------------------------------------------------------------
     # Verifying the log itself
@@ -412,12 +424,12 @@ class TransparencyLog:
         for position, entry in enumerate(self._entries):
             if entry.index != position:
                 raise LogLinkError(
-                    f'entry at position {position} claims index {entry.index}'
+                    f"entry at position {position} claims index {entry.index}"
                 )
             entry.verify()
             if entry.previous != previous:
                 raise LogLinkError(
-                    f'entry {entry.index} does not link to the entry before it'
+                    f"entry {entry.index} does not link to the entry before it"
                 )
             previous = entry.hash()
 
@@ -425,16 +437,16 @@ class TransparencyLog:
             index, entry_hash = anchor
             if len(self._entries) <= index:
                 raise LogRollback(
-                    f'the log has {len(self._entries)} entries, but this client '
-                    f'already reached position {index}'
+                    f"the log has {len(self._entries)} entries, but this client "
+                    f"already reached position {index}"
                 )
             if self._entries[index].hash() != entry_hash:
                 raise LogRollback(
-                    f'the log disagrees with this client at position {index}: '
-                    f'it has been rewritten there'
+                    f"the log disagrees with this client at position {index}: "
+                    f"it has been rewritten there"
                 )
 
-    def fork_points(self, other: 'TransparencyLog') -> List[int]:
+    def fork_points(self, other: "TransparencyLog") -> List[int]:
         """
         Positions where two logs disagree, or ``[]`` if they agree.
 
@@ -464,15 +476,20 @@ class Anchor:
     entry_hash: bytes
 
     def __post_init__(self) -> None:
-        if isinstance(self.index, bool) or not isinstance(self.index, int) \
-                or self.index < -1:
-            raise LogFormatError('anchor index must be an int >= -1')
-        if not isinstance(self.entry_hash, (bytes, bytearray)) or \
-                len(self.entry_hash) != _HASH_LEN:
-            raise LogFormatError(f'anchor hash must be {_HASH_LEN} bytes')
+        if (
+            isinstance(self.index, bool)
+            or not isinstance(self.index, int)
+            or self.index < -1
+        ):
+            raise LogFormatError("anchor index must be an int >= -1")
+        if (
+            not isinstance(self.entry_hash, (bytes, bytearray))
+            or len(self.entry_hash) != _HASH_LEN
+        ):
+            raise LogFormatError(f"anchor hash must be {_HASH_LEN} bytes")
 
     @classmethod
-    def genesis(cls) -> 'Anchor':
+    def genesis(cls) -> "Anchor":
         """The anchor of a client that has never seen a log: nothing, at -1."""
         return cls(index=-1, entry_hash=GENESIS)
 
@@ -535,8 +552,8 @@ class SenderKeyTransparency(ChainAttestation):
 
             if entry.index in seen and seen[entry.index] != entry.hash():
                 raise LogRollback(
-                    f'position {entry.index} was already incorporated and this '
-                    f'entry differs: the log has been rewritten there'
+                    f"position {entry.index} was already incorporated and this "
+                    f"entry differs: the log has been rewritten there"
                 )
 
             if entry.index == 0:
@@ -548,18 +565,18 @@ class SenderKeyTransparency(ChainAttestation):
                 # was skipped rather than merely unseen. An unseen entry before
                 # the anchor is fine: the anchor already stands for it.
                 raise LogLinkError(
-                    f'entry {entry.index} skips position {entry.index - 1}, '
-                    f'which is past the anchor this client holds'
+                    f"entry {entry.index} skips position {entry.index - 1}, "
+                    f"which is past the anchor this client holds"
                 )
             else:
                 expected = entry.previous
 
             if entry.index > 0 and entry.previous != expected:
                 raise LogLinkError(
-                    f'entry {entry.index} does not link to the entry before it'
+                    f"entry {entry.index} does not link to the entry before it"
                 )
             if entry.index == 0 and entry.previous != GENESIS:
-                raise LogLinkError('the first entry must point at nothing')
+                raise LogLinkError("the first entry must point at nothing")
 
             seen[entry.index] = entry.hash()
 
@@ -573,9 +590,7 @@ class SenderKeyTransparency(ChainAttestation):
             self._entries.append(entry)
             self._by_sender[entry.key_id] = entry.index
         if new:
-            self._anchor = Anchor(
-                index=new[-1].index, entry_hash=new[-1].hash()
-            )
+            self._anchor = Anchor(index=new[-1].index, entry_hash=new[-1].hash())
             self._changed = True
 
     def adopt(self, log: TransparencyLog) -> None:
@@ -636,7 +651,7 @@ class SenderKeyTransparency(ChainAttestation):
         for entry in reversed(self._entries):
             if entry.index == index:
                 return entry
-        raise LogLinkError(f'no entry at position {index}')
+        raise LogLinkError(f"no entry at position {index}")
 
     # ------------------------------------------------------------------
 
@@ -656,10 +671,7 @@ class SenderKeyTransparency(ChainAttestation):
 
     def known_chains(self, key_id: SenderKeyId) -> List[bytes]:
         """Chain ids this client has seen for a sender, in log order."""
-        return [
-            entry.chain_id for entry in self._entries
-            if entry.key_id == key_id
-        ]
+        return [entry.chain_id for entry in self._entries if entry.key_id == key_id]
 
     def size(self) -> int:
         return len(self._entries)
@@ -683,14 +695,14 @@ def attested_builder():
 
 
 __all__ = [
-    'Anchor',
-    'ChainAttestation',
-    'LogEntry',
-    'LogFormatError',
-    'LogLinkError',
-    'LogRollback',
-    'LogSignatureError',
-    'SenderKeyTransparency',
-    'TransparencyError',
-    'TransparencyLog',
+    "Anchor",
+    "ChainAttestation",
+    "LogEntry",
+    "LogFormatError",
+    "LogLinkError",
+    "LogRollback",
+    "LogSignatureError",
+    "SenderKeyTransparency",
+    "TransparencyError",
+    "TransparencyLog",
 ]

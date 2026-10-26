@@ -62,8 +62,8 @@ HKDF_INFO = b"WhisperRatchet-v2"
 NONCE_SIZE = 24  # XChaCha20-Poly1305 nonce
 KEY_SIZE = 32
 _DH_PUB_LEN = 32
-_ZERO = b'\x00' * KEY_SIZE
-_UINT32_MAX = 2 ** 32
+_ZERO = b"\x00" * KEY_SIZE
+_UINT32_MAX = 2**32
 
 
 class DoubleRatchetError(Exception):
@@ -102,13 +102,11 @@ def _require_len(value, size: int, name: str, *, optional: bool = False) -> None
     if value is None:
         if optional:
             return
-        raise InvalidSessionStateError(f'{name} is required')
+        raise InvalidSessionStateError(f"{name} is required")
     if not isinstance(value, (bytes, bytearray)):
-        raise InvalidSessionStateError(f'{name} must be bytes')
+        raise InvalidSessionStateError(f"{name} must be bytes")
     if len(value) != size:
-        raise InvalidSessionStateError(
-            f'{name} must be {size} bytes, got {len(value)}'
-        )
+        raise InvalidSessionStateError(f"{name} must be {size} bytes, got {len(value)}")
 
 
 def _require_counter(value, name: str) -> None:
@@ -120,9 +118,9 @@ def _require_counter(value, name: str) -> None:
     ``1``, turning a type confusion into a silently wrong counter.
     """
     if not isinstance(value, int) or isinstance(value, bool):
-        raise InvalidSessionStateError(f'{name} must be an int')
+        raise InvalidSessionStateError(f"{name} must be an int")
     if not 0 <= value < _UINT32_MAX:
-        raise InvalidSessionStateError(f'{name} out of range: {value}')
+        raise InvalidSessionStateError(f"{name} out of range: {value}")
 
 
 @dataclass
@@ -174,49 +172,50 @@ class SessionState:
             InvalidSessionStateError: any field is malformed, or
                 ``dh_local_pub`` does not belong to ``dh_local_priv``.
         """
-        _require_len(self.dh_local_priv, _DH_PUB_LEN, 'dh_local_priv')
-        _require_len(self.dh_local_pub, _DH_PUB_LEN, 'dh_local_pub')
-        _require_len(self.dh_remote_pub, _DH_PUB_LEN, 'dh_remote_pub', optional=True)
-        _require_len(self.root_key, KEY_SIZE, 'root_key')
-        _require_len(self.send_chain_key, KEY_SIZE, 'send_chain_key', optional=True)
-        _require_len(self.recv_chain_key, KEY_SIZE, 'recv_chain_key', optional=True)
-        _require_counter(self.send_msg_count, 'send_msg_count')
-        _require_counter(self.recv_msg_count, 'recv_msg_count')
-        _require_counter(self.prev_send_count, 'prev_send_count')
+        _require_len(self.dh_local_priv, _DH_PUB_LEN, "dh_local_priv")
+        _require_len(self.dh_local_pub, _DH_PUB_LEN, "dh_local_pub")
+        _require_len(self.dh_remote_pub, _DH_PUB_LEN, "dh_remote_pub", optional=True)
+        _require_len(self.root_key, KEY_SIZE, "root_key")
+        _require_len(self.send_chain_key, KEY_SIZE, "send_chain_key", optional=True)
+        _require_len(self.recv_chain_key, KEY_SIZE, "recv_chain_key", optional=True)
+        _require_counter(self.send_msg_count, "send_msg_count")
+        _require_counter(self.recv_msg_count, "recv_msg_count")
+        _require_counter(self.prev_send_count, "prev_send_count")
 
         derived = bytes(public.PrivateKey(bytes(self.dh_local_priv)).public_key)
         if not hmac.compare_digest(derived, bytes(self.dh_local_pub)):
             raise InvalidSessionStateError(
-                'dh_local_pub does not match dh_local_priv: the session would '
-                'advertise one key and derive with another'
+                "dh_local_pub does not match dh_local_priv: the session would "
+                "advertise one key and derive with another"
             )
 
         if not isinstance(self.skipped_keys, dict):
-            raise InvalidSessionStateError('skipped_keys must be a mapping')
+            raise InvalidSessionStateError("skipped_keys must be a mapping")
         if len(self.skipped_keys) > MAX_STORED_SKIPPED:
             # Bounded on load as well as on store: a state file is untrusted
             # input at this boundary, and nothing else would stop a huge
             # skipped_keys list from being materialised.
             raise InvalidSessionStateError(
-                f'skipped_keys holds {len(self.skipped_keys)} entries, over the '
-                f'MAX_STORED_SKIPPED={MAX_STORED_SKIPPED} limit'
+                f"skipped_keys holds {len(self.skipped_keys)} entries, over the "
+                f"MAX_STORED_SKIPPED={MAX_STORED_SKIPPED} limit"
             )
         for key_id, message_key in self.skipped_keys.items():
             if not isinstance(key_id, tuple) or len(key_id) != 2:
                 raise InvalidSessionStateError(
-                    'skipped_keys key must be a (remote_dh, message_number) pair'
+                    "skipped_keys key must be a (remote_dh, message_number) pair"
                 )
             remote_dh, msg_num = key_id
             # An empty remote DH is legitimate: it marks keys skipped before a
             # peer key was known. See DoubleRatchet._derive_skipped_keys.
             if not isinstance(remote_dh, (bytes, bytearray)) or len(remote_dh) not in (
-                0, _DH_PUB_LEN
+                0,
+                _DH_PUB_LEN,
             ):
                 raise InvalidSessionStateError(
-                    'skipped_keys remote_dh must be 0 or 32 bytes'
+                    "skipped_keys remote_dh must be 0 or 32 bytes"
                 )
-            _require_counter(msg_num, 'skipped_keys message number')
-            _require_len(message_key, KEY_SIZE, 'skipped_keys message key')
+            _require_counter(msg_num, "skipped_keys message number")
+            _require_len(message_key, KEY_SIZE, "skipped_keys message key")
 
     def serialize(self, include_message_keys: bool = False) -> dict:
         """
@@ -228,27 +227,31 @@ class SessionState:
         trade-off: see the module docstring.
         """
         state = {
-            'version': PROTOCOL_VERSION,
-            'dh_local_priv': self.dh_local_priv.hex(),
-            'dh_local_pub': self.dh_local_pub.hex(),
-            'dh_remote_pub': self.dh_remote_pub.hex() if self.dh_remote_pub else None,
-            'root_key': self.root_key.hex(),
-            'send_chain_key': self.send_chain_key.hex() if self.send_chain_key else None,
-            'recv_chain_key': self.recv_chain_key.hex() if self.recv_chain_key else None,
-            'send_msg_count': self.send_msg_count,
-            'recv_msg_count': self.recv_msg_count,
-            'prev_send_count': self.prev_send_count,
+            "version": PROTOCOL_VERSION,
+            "dh_local_priv": self.dh_local_priv.hex(),
+            "dh_local_pub": self.dh_local_pub.hex(),
+            "dh_remote_pub": self.dh_remote_pub.hex() if self.dh_remote_pub else None,
+            "root_key": self.root_key.hex(),
+            "send_chain_key": (
+                self.send_chain_key.hex() if self.send_chain_key else None
+            ),
+            "recv_chain_key": (
+                self.recv_chain_key.hex() if self.recv_chain_key else None
+            ),
+            "send_msg_count": self.send_msg_count,
+            "recv_msg_count": self.recv_msg_count,
+            "prev_send_count": self.prev_send_count,
         }
         if include_message_keys:
             # A list of records, not a dict: tuple keys are not JSON-safe.
-            state['skipped_keys'] = [
+            state["skipped_keys"] = [
                 [dh_pub.hex(), msg_num, message_key.hex()]
                 for (dh_pub, msg_num), message_key in self.skipped_keys.items()
             ]
         return state
 
     @classmethod
-    def deserialize(cls, data: dict) -> 'SessionState':
+    def deserialize(cls, data: dict) -> "SessionState":
         """
         Rebuild state from :meth:`serialize` output.
 
@@ -262,42 +265,42 @@ class SessionState:
         """
         if not isinstance(data, dict):
             raise InvalidSessionStateError(
-                f'serialized session state must be a dict, got '
-                f'{type(data).__name__}'
+                f"serialized session state must be a dict, got "
+                f"{type(data).__name__}"
             )
-        version = data.get('version')
+        version = data.get("version")
         if version is None:
             raise IncompatibleSessionError(
-                'session state has no protocol version; it predates the v2 KDF '
-                'and cannot be loaded safely'
+                "session state has no protocol version; it predates the v2 KDF "
+                "and cannot be loaded safely"
             )
         if version != PROTOCOL_VERSION:
             raise IncompatibleSessionError(
-                f'session state version {version} != {PROTOCOL_VERSION}'
+                f"session state version {version} != {PROTOCOL_VERSION}"
             )
 
-        records = data.get('skipped_keys') or []
+        records = data.get("skipped_keys") or []
         if not isinstance(records, list):
-            raise InvalidSessionStateError('skipped_keys must be a list')
+            raise InvalidSessionStateError("skipped_keys must be a list")
         # Checked before the loop, not only in __post_init__: this bounds the
         # work done on a hostile payload rather than after building it.
         if len(records) > MAX_STORED_SKIPPED:
             raise InvalidSessionStateError(
-                f'skipped_keys holds {len(records)} entries, over the '
-                f'MAX_STORED_SKIPPED={MAX_STORED_SKIPPED} limit'
+                f"skipped_keys holds {len(records)} entries, over the "
+                f"MAX_STORED_SKIPPED={MAX_STORED_SKIPPED} limit"
             )
 
         skipped: "OrderedDict[Tuple[bytes, int], bytes]" = OrderedDict()
         for record in records:
             if not isinstance(record, (list, tuple)) or len(record) != 3:
-                raise InvalidSessionStateError('malformed skipped_keys record')
+                raise InvalidSessionStateError("malformed skipped_keys record")
             dh_pub, msg_num, message_key_hex = record
             try:
                 key = (bytes.fromhex(dh_pub), int(msg_num))
                 message_key = bytes.fromhex(message_key_hex)
             except (TypeError, ValueError) as exc:
                 raise InvalidSessionStateError(
-                    'skipped_keys record is not valid hex'
+                    "skipped_keys record is not valid hex"
                 ) from exc
             skipped[key] = message_key
 
@@ -310,54 +313,60 @@ class SessionState:
                 raw = data[field_name]
             except KeyError as exc:
                 raise InvalidSessionStateError(
-                    f'serialized session state is missing {field_name!r}'
+                    f"serialized session state is missing {field_name!r}"
                 ) from exc
-            if raw is None or raw == '':
+            if raw is None or raw == "":
                 return None
             if not isinstance(raw, str):
                 raise InvalidSessionStateError(
-                    f'serialized session state field {field_name!r} must be hex'
+                    f"serialized session state field {field_name!r} must be hex"
                 )
             try:
                 return bytes.fromhex(raw)
             except ValueError as exc:
                 raise InvalidSessionStateError(
-                    f'serialized session state field {field_name!r} is not valid hex'
+                    f"serialized session state field {field_name!r} is not valid hex"
                 ) from exc
+
+        def _required_hex(field_name: str) -> bytes:
+            value = _hex(field_name)
+            if value is None:
+                raise InvalidSessionStateError(f"{field_name} is required")
+            return value
 
         def _int(field_name: str) -> int:
             try:
                 raw = data[field_name]
             except KeyError as exc:
                 raise InvalidSessionStateError(
-                    f'serialized session state is missing {field_name!r}'
+                    f"serialized session state is missing {field_name!r}"
                 ) from exc
             # Rejected before the int() call below, which would otherwise turn
             # a JSON ``true`` into a perfectly valid counter of 1 and hide the
             # fact that the field was never a number.
             if isinstance(raw, bool):
                 raise InvalidSessionStateError(
-                    f'serialized session state field {field_name!r} must be an '
-                    f'int, got a boolean'
+                    f"serialized session state field {field_name!r} must be an "
+                    f"int, got a boolean"
                 )
             try:
                 return int(raw)
             except (TypeError, ValueError) as exc:
                 raise InvalidSessionStateError(
-                    f'serialized session state field {field_name!r} must be an int'
+                    f"serialized session state field {field_name!r} must be an int"
                 ) from exc
 
         # __post_init__ runs validate() on the result.
         return cls(
-            dh_local_priv=_hex('dh_local_priv'),
-            dh_local_pub=_hex('dh_local_pub'),
-            dh_remote_pub=_hex('dh_remote_pub'),
-            root_key=_hex('root_key'),
-            send_chain_key=_hex('send_chain_key'),
-            recv_chain_key=_hex('recv_chain_key'),
-            send_msg_count=_int('send_msg_count'),
-            recv_msg_count=_int('recv_msg_count'),
-            prev_send_count=_int('prev_send_count'),
+            dh_local_priv=_required_hex("dh_local_priv"),
+            dh_local_pub=_required_hex("dh_local_pub"),
+            dh_remote_pub=_hex("dh_remote_pub"),
+            root_key=_required_hex("root_key"),
+            send_chain_key=_hex("send_chain_key"),
+            recv_chain_key=_hex("recv_chain_key"),
+            send_msg_count=_int("send_msg_count"),
+            recv_msg_count=_int("recv_msg_count"),
+            prev_send_count=_int("prev_send_count"),
             skipped_keys=skipped,
         )
 
@@ -368,15 +377,15 @@ class DoubleRatchet:
     rollback of failed decryptions.
     """
 
-    def __init__(self,
-                 dh_private: public.PrivateKey,
-                 remote_dh_public: Optional[bytes],
-                 root_key: bytes,
-                 is_initiator: bool = True):
+    def __init__(
+        self,
+        dh_private: public.PrivateKey,
+        remote_dh_public: Optional[bytes],
+        root_key: bytes,
+        is_initiator: bool = True,
+    ):
         if len(root_key) != KEY_SIZE:
-            raise InvalidSessionStateError(
-                f'root key must be {KEY_SIZE} bytes'
-            )
+            raise InvalidSessionStateError(f"root key must be {KEY_SIZE} bytes")
         self._state = SessionState(
             dh_local_priv=bytes(dh_private),
             dh_local_pub=bytes(dh_private.public_key),
@@ -397,7 +406,7 @@ class DoubleRatchet:
         return self._state
 
     @classmethod
-    def from_state(cls, data) -> 'DoubleRatchet':
+    def from_state(cls, data) -> "DoubleRatchet":
         """
         Rebuild a ratchet from a persisted session, exactly as it was.
 
@@ -442,8 +451,8 @@ class DoubleRatchet:
             data = data.serialize(include_message_keys=True)
         elif not isinstance(data, dict):
             raise InvalidSessionStateError(
-                f'from_state expects a SessionState or a serialized dict, got '
-                f'{type(data).__name__}'
+                f"from_state expects a SessionState or a serialized dict, got "
+                f"{type(data).__name__}"
             )
 
         state = SessionState.deserialize(data)
@@ -462,14 +471,14 @@ class DoubleRatchet:
     def _dh(self, private: public.PrivateKey, pub: bytes) -> bytes:
         """X25519 with an explicit degenerate-output check."""
         if len(pub) != _DH_PUB_LEN:
-            raise DecryptionError('DH public key must be 32 bytes')
+            raise DecryptionError("DH public key must be 32 bytes")
         try:
             shared = nacl.bindings.crypto_scalarmult(bytes(private), pub)
         except Exception as exc:
-            raise DecryptionError('X25519 rejected the public key') from exc
+            raise DecryptionError("X25519 rejected the public key") from exc
         if shared == _ZERO:
             raise DecryptionError(
-                'degenerate X25519 output: public key is a low-order point'
+                "degenerate X25519 output: public key is a low-order point"
             )
         return shared
 
@@ -485,9 +494,9 @@ class DoubleRatchet:
         sessions derived identical message keys.
         """
         okm = hkdf(
-            salt=root_key, ikm=dh_output, info=HKDF_INFO + b'\x01', length=2 * KEY_SIZE
+            salt=root_key, ikm=dh_output, info=HKDF_INFO + b"\x01", length=2 * KEY_SIZE
         )
-        return okm[:KEY_SIZE], okm[KEY_SIZE:2 * KEY_SIZE]
+        return okm[:KEY_SIZE], okm[KEY_SIZE : 2 * KEY_SIZE]
 
     def _kdf_ck(self, chain_key: bytes) -> Tuple[bytes, bytes]:
         """
@@ -496,8 +505,8 @@ class DoubleRatchet:
         Per the specification the next chain key is ``HMAC(ck, 0x01)`` and the
         message key is ``HMAC(ck, 0x02)``.
         """
-        next_chain_key = hmac.new(chain_key, b'\x01', hashlib.sha256).digest()
-        message_key = hmac.new(chain_key, b'\x02', hashlib.sha256).digest()
+        next_chain_key = hmac.new(chain_key, b"\x01", hashlib.sha256).digest()
+        message_key = hmac.new(chain_key, b"\x02", hashlib.sha256).digest()
         return next_chain_key, message_key
 
     # ------------------------------------------------------------------
@@ -506,29 +515,29 @@ class DoubleRatchet:
 
     def _snapshot(self) -> dict:
         return {
-            'dh_local_priv': self._state.dh_local_priv,
-            'dh_local_pub': self._state.dh_local_pub,
-            'dh_remote_pub': self._state.dh_remote_pub,
-            'root_key': self._state.root_key,
-            'send_chain_key': self._state.send_chain_key,
-            'recv_chain_key': self._state.recv_chain_key,
-            'send_msg_count': self._state.send_msg_count,
-            'recv_msg_count': self._state.recv_msg_count,
-            'prev_send_count': self._state.prev_send_count,
-            'skipped_keys': OrderedDict(self._state.skipped_keys),
+            "dh_local_priv": self._state.dh_local_priv,
+            "dh_local_pub": self._state.dh_local_pub,
+            "dh_remote_pub": self._state.dh_remote_pub,
+            "root_key": self._state.root_key,
+            "send_chain_key": self._state.send_chain_key,
+            "recv_chain_key": self._state.recv_chain_key,
+            "send_msg_count": self._state.send_msg_count,
+            "recv_msg_count": self._state.recv_msg_count,
+            "prev_send_count": self._state.prev_send_count,
+            "skipped_keys": OrderedDict(self._state.skipped_keys),
         }
 
     def _restore(self, snapshot: dict) -> None:
-        self._state.dh_local_priv = snapshot['dh_local_priv']
-        self._state.dh_local_pub = snapshot['dh_local_pub']
-        self._state.dh_remote_pub = snapshot['dh_remote_pub']
-        self._state.root_key = snapshot['root_key']
-        self._state.send_chain_key = snapshot['send_chain_key']
-        self._state.recv_chain_key = snapshot['recv_chain_key']
-        self._state.send_msg_count = snapshot['send_msg_count']
-        self._state.recv_msg_count = snapshot['recv_msg_count']
-        self._state.prev_send_count = snapshot['prev_send_count']
-        self._state.skipped_keys = snapshot['skipped_keys']
+        self._state.dh_local_priv = snapshot["dh_local_priv"]
+        self._state.dh_local_pub = snapshot["dh_local_pub"]
+        self._state.dh_remote_pub = snapshot["dh_remote_pub"]
+        self._state.root_key = snapshot["root_key"]
+        self._state.send_chain_key = snapshot["send_chain_key"]
+        self._state.recv_chain_key = snapshot["recv_chain_key"]
+        self._state.send_msg_count = snapshot["send_msg_count"]
+        self._state.recv_msg_count = snapshot["recv_msg_count"]
+        self._state.prev_send_count = snapshot["prev_send_count"]
+        self._state.skipped_keys = snapshot["skipped_keys"]
         self._dh_private = public.PrivateKey(self._state.dh_local_priv)
 
     # ------------------------------------------------------------------
@@ -542,7 +551,7 @@ class DoubleRatchet:
         self._state.dh_local_pub = bytes(new_dh_private.public_key)
 
         if self._state.dh_remote_pub is None:
-            raise InvalidSessionStateError('remote DH public key required to ratchet')
+            raise InvalidSessionStateError("remote DH public key required to ratchet")
 
         dh_output = self._dh(new_dh_private, self._state.dh_remote_pub)
         self._state.root_key, self._state.send_chain_key = self._kdf_rk(
@@ -574,7 +583,9 @@ class DoubleRatchet:
             # Messages the peer already sent on the previous chain must become
             # decryptable before the chains move on.
             self._derive_skipped_keys(
-                old_chain_key, old_msg_count, self._state.prev_send_count,
+                old_chain_key,
+                old_msg_count,
+                self._state.prev_send_count,
                 old_remote_dh,
             )
 
@@ -599,11 +610,13 @@ class DoubleRatchet:
         )
 
     def _store_skipped_key(self, key_id: Tuple[bytes, int], message_key: bytes) -> None:
-        if len(self._state.skipped_keys) >= MAX_STORED_SKIPPED and \
-                key_id not in self._state.skipped_keys:
+        if (
+            len(self._state.skipped_keys) >= MAX_STORED_SKIPPED
+            and key_id not in self._state.skipped_keys
+        ):
             raise TooManySkippedMessagesError(
-                f'storing skipped keys would exceed MAX_STORED_SKIPPED='
-                f'{MAX_STORED_SKIPPED}'
+                f"storing skipped keys would exceed MAX_STORED_SKIPPED="
+                f"{MAX_STORED_SKIPPED}"
             )
         self._state.skipped_keys[key_id] = message_key
 
@@ -632,21 +645,25 @@ class DoubleRatchet:
 
         if (to_msg_num - from_msg_num) > MAX_SKIP:
             raise TooManySkippedMessagesError(
-                f'skipping {to_msg_num - from_msg_num} messages exceeds '
-                f'MAX_SKIP={MAX_SKIP}'
+                f"skipping {to_msg_num - from_msg_num} messages exceeds "
+                f"MAX_SKIP={MAX_SKIP}"
             )
-        if len(self._state.skipped_keys) + (to_msg_num - from_msg_num) > MAX_STORED_SKIPPED:
+        if (
+            len(self._state.skipped_keys) + (to_msg_num - from_msg_num)
+            > MAX_STORED_SKIPPED
+        ):
             raise TooManySkippedMessagesError(
-                f'storing skipped keys would exceed MAX_STORED_SKIPPED='
-                f'{MAX_STORED_SKIPPED}'
+                f"storing skipped keys would exceed MAX_STORED_SKIPPED="
+                f"{MAX_STORED_SKIPPED}"
             )
 
         key = chain_key
         msg_num = from_msg_num
         while msg_num < to_msg_num:
             key, message_key = self._kdf_ck(key)
-            self._store_skipped_key((bytes(remote_dh) if remote_dh else b'', msg_num),
-                                    message_key)
+            self._store_skipped_key(
+                (bytes(remote_dh) if remote_dh else b"", msg_num), message_key
+            )
             msg_num += 1
         return key, msg_num
 
@@ -675,38 +692,36 @@ class DoubleRatchet:
 
     def _validate_header(self, header: dict) -> Tuple[bytes, int]:
         if not isinstance(header, dict):
-            raise InvalidSessionStateError('header must be a dict')
-        for field_name in ('dh', 'pn', 'n'):
+            raise InvalidSessionStateError("header must be a dict")
+        for field_name in ("dh", "pn", "n"):
             if field_name not in header:
-                raise InvalidSessionStateError(f'header missing {field_name!r}')
+                raise InvalidSessionStateError(f"header missing {field_name!r}")
 
-        dh_hex = header['dh']
+        dh_hex = header["dh"]
         if not isinstance(dh_hex, str) or len(dh_hex) != _DH_PUB_LEN * 2:
-            raise InvalidSessionStateError('header dh must be 32-byte hex')
+            raise InvalidSessionStateError("header dh must be 32-byte hex")
 
-        for field_name in ('pn', 'n'):
+        for field_name in ("pn", "n"):
             value = header[field_name]
             if not isinstance(value, int) or isinstance(value, bool):
-                raise InvalidSessionStateError(
-                    f'header {field_name} must be an int'
-                )
+                raise InvalidSessionStateError(f"header {field_name} must be an int")
             if not 0 <= value < _UINT32_MAX:
-                raise InvalidSessionStateError(
-                    f'header {field_name} out of range'
-                )
+                raise InvalidSessionStateError(f"header {field_name} out of range")
 
-        return bytes.fromhex(dh_hex), int(header['n'])
+        return bytes.fromhex(dh_hex), int(header["n"])
 
     def _serialize_header(self, header: dict) -> bytes:
         """Deterministic serialisation of the header, used as AD."""
-        dh = bytes.fromhex(header['dh'])
-        return dh + header['pn'].to_bytes(4, 'big') + header['n'].to_bytes(4, 'big')
+        dh = bytes.fromhex(header["dh"])
+        return dh + header["pn"].to_bytes(4, "big") + header["n"].to_bytes(4, "big")
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def encrypt(self, plaintext: bytes, associated_data: bytes = b'') -> Tuple[bytes, dict]:
+    def encrypt(
+        self, plaintext: bytes, associated_data: bytes = b""
+    ) -> Tuple[bytes, dict]:
         """
         Encrypt one message.
 
@@ -717,15 +732,15 @@ class DoubleRatchet:
         """
         if self._state.send_chain_key is None:
             self._perform_dh_ratchet_as_sender()
-
-        self._state.send_chain_key, message_key = self._kdf_ck(
-            self._state.send_chain_key
-        )
+        send_chain_key = self._state.send_chain_key
+        if send_chain_key is None:  # pragma: no cover - the ratchet sets it
+            raise InvalidSessionStateError("send chain key is missing after DH ratchet")
+        self._state.send_chain_key, message_key = self._kdf_ck(send_chain_key)
 
         header = {
-            'dh': self._state.dh_local_pub.hex(),
-            'pn': self._state.prev_send_count,
-            'n': self._state.send_msg_count,
+            "dh": self._state.dh_local_pub.hex(),
+            "pn": self._state.prev_send_count,
+            "n": self._state.send_msg_count,
         }
         ad = associated_data + self._serialize_header(header)
 
@@ -737,7 +752,9 @@ class DoubleRatchet:
         self._state.send_msg_count += 1
         return nonce + ciphertext, header
 
-    def decrypt(self, encrypted: bytes, header: dict, associated_data: bytes = b'') -> bytes:
+    def decrypt(
+        self, encrypted: bytes, header: dict, associated_data: bytes = b""
+    ) -> bytes:
         """
         Decrypt one message.
 
@@ -754,7 +771,7 @@ class DoubleRatchet:
         """
         remote_dh, msg_num = self._validate_header(header)
         if len(encrypted) <= NONCE_SIZE:
-            raise DecryptionError('ciphertext is too short to contain a nonce')
+            raise DecryptionError("ciphertext is too short to contain a nonce")
 
         ad = associated_data + self._serialize_header(header)
         nonce = encrypted[:NONCE_SIZE]
@@ -769,8 +786,9 @@ class DoubleRatchet:
             self._restore(snapshot)
             raise
 
-    def _decrypt_inner(self, remote_dh: bytes, msg_num: int,
-                       nonce: bytes, ciphertext: bytes, ad: bytes) -> bytes:
+    def _decrypt_inner(
+        self, remote_dh: bytes, msg_num: int, nonce: bytes, ciphertext: bytes, ad: bytes
+    ) -> bytes:
         # 1. A key retained for an out-of-order message.
         key_id = (remote_dh, msg_num)
         retained = self._state.skipped_keys.get(key_id)
@@ -786,15 +804,15 @@ class DoubleRatchet:
         # 3. Reject replays before deriving anything.
         if msg_num < self._state.recv_msg_count:
             raise DuplicateMessageError(
-                f'message {msg_num} already received '
-                f'(current: {self._state.recv_msg_count})'
+                f"message {msg_num} already received "
+                f"(current: {self._state.recv_msg_count})"
             )
 
         # 4. Derive and retain the keys we skipped over.
         self._skip_message_keys(msg_num)
 
         if self._state.recv_chain_key is None:
-            raise InvalidSessionStateError('receive chain key is None')
+            raise InvalidSessionStateError("receive chain key is None")
 
         # 5. Derive this message's key and decrypt.
         self._state.recv_chain_key, message_key = self._kdf_ck(
@@ -803,13 +821,14 @@ class DoubleRatchet:
         self._state.recv_msg_count += 1
         return self._do_decrypt(message_key, nonce, ciphertext, ad)
 
-    def _do_decrypt(self, message_key: bytes, nonce: bytes,
-                    ciphertext: bytes, ad: bytes) -> bytes:
+    def _do_decrypt(
+        self, message_key: bytes, nonce: bytes, ciphertext: bytes, ad: bytes
+    ) -> bytes:
         try:
             return nacl.bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
                 ciphertext, ad, nonce, message_key
             )
         except Exception as exc:
             raise DecryptionError(
-                'AEAD decryption failed: message corrupted or tampered with'
+                "AEAD decryption failed: message corrupted or tampered with"
             ) from exc

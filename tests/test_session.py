@@ -62,6 +62,7 @@ from src.protocol.wire import (
 )
 
 from src.crypto.pq import stocked_pq_store
+
 PREKEYS = 5
 
 
@@ -99,18 +100,19 @@ def handshake(prekeys: int = PREKEYS, **kwargs):
     responder_session, confirmation = accept(responder, init_frame)
     initiator.confirm(confirmation)
     return {
-        'initiator': initiator,
-        'responder': responder_session,
-        'initiator_private': initiator_private,
-        'initiator_public': initiator_public,
-        'responder_public': responder_public,
-        'store': store,
+        "initiator": initiator,
+        "responder": responder_session,
+        "initiator_private": initiator_private,
+        "initiator_public": initiator_public,
+        "responder_public": responder_public,
+        "store": store,
     }
 
 
 # ---------------------------------------------------------------------------
 # The full cycle
 # ---------------------------------------------------------------------------
+
 
 def test_handshake_produces_the_frames_the_specification_calls_for():
     responder, _, _ = make_responder()
@@ -126,48 +128,52 @@ def test_handshake_produces_the_frames_the_specification_calls_for():
 
 def test_a_bundle_is_a_bundle_frame():
     responder, _, _ = make_responder()
-    assert encode_prekey_bundle(responder.publish_bundle())[1] == \
-        KIND_PREKEY_BUNDLE
+    assert encode_prekey_bundle(responder.publish_bundle())[1] == KIND_PREKEY_BUNDLE
 
 
 def test_messages_flow_both_ways_through_the_wire():
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
+    initiator, responder_session = pair["initiator"], pair["responder"]
 
-    frame = initiator.send(b'privet')
+    frame = initiator.send(b"privet")
     assert frame[1] == KIND_RATCHET_MESSAGE
-    assert responder_session.receive(frame) == b'privet'
+    assert responder_session.receive(frame) == b"privet"
 
-    assert initiator.receive(responder_session.send(b'privet, kak dela')) == \
-        b'privet, kak dela'
+    assert (
+        initiator.receive(responder_session.send(b"privet, kak dela"))
+        == b"privet, kak dela"
+    )
 
 
 def test_a_long_conversation_in_both_directions():
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
+    initiator, responder_session = pair["initiator"], pair["responder"]
     for index in range(25):
-        sent = b'message %d' % index
+        sent = b"message %d" % index
         assert responder_session.receive(initiator.send(sent)) == sent
-        reply = b'reply %d' % index
+        reply = b"reply %d" % index
         assert initiator.receive(responder_session.send(reply)) == reply
 
 
 def test_empty_and_large_messages():
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
-    assert responder_session.receive(initiator.send(b'')) == b''
+    initiator, responder_session = pair["initiator"], pair["responder"]
+    assert responder_session.receive(initiator.send(b"")) == b""
     big = bytes(range(256)) * 400  # 102400 bytes
     assert responder_session.receive(initiator.send(big)) == big
 
 
 def test_out_of_order_delivery():
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
-    first, second, third = (initiator.send(b'1'), initiator.send(b'2'),
-                            initiator.send(b'3'))
-    assert responder_session.receive(third) == b'3'
-    assert responder_session.receive(first) == b'1'
-    assert responder_session.receive(second) == b'2'
+    initiator, responder_session = pair["initiator"], pair["responder"]
+    first, second, third = (
+        initiator.send(b"1"),
+        initiator.send(b"2"),
+        initiator.send(b"3"),
+    )
+    assert responder_session.receive(third) == b"3"
+    assert responder_session.receive(first) == b"1"
+    assert responder_session.receive(second) == b"2"
 
 
 def test_the_sender_turns_over_when_its_messages_run_out_first():
@@ -179,15 +185,16 @@ def test_the_sender_turns_over_when_its_messages_run_out_first():
     order would desynchronise here instead of recovering.
     """
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
+    initiator, responder_session = pair["initiator"], pair["responder"]
     # The first message has to arrive before the responder can answer at all:
     # its remote ratchet key comes out of that header.
-    assert responder_session.receive(initiator.send(b'one')) == b'one'
+    assert responder_session.receive(initiator.send(b"one")) == b"one"
     for index in range(4):
-        assert initiator.receive(
-            responder_session.send(b'reply %d' % index)
-        ) == b'reply %d' % index
-    assert responder_session.receive(initiator.send(b'two')) == b'two'
+        assert (
+            initiator.receive(responder_session.send(b"reply %d" % index))
+            == b"reply %d" % index
+        )
+    assert responder_session.receive(initiator.send(b"two")) == b"two"
 
 
 def test_the_responder_cannot_send_before_it_has_heard_anything():
@@ -201,19 +208,20 @@ def test_the_responder_cannot_send_before_it_has_heard_anything():
     """
     pair = handshake()
     with pytest.raises(InvalidSessionStateError):
-        pair['responder'].send(b'out of turn')
+        pair["responder"].send(b"out of turn")
 
 
 def test_the_handshake_spends_a_one_time_prekey():
     pair = handshake()
-    spent = pair['initiator'].one_time_prekey_id
+    spent = pair["initiator"].one_time_prekey_id
     assert spent is not None
-    assert pair['store'].was_consumed(spent)
+    assert pair["store"].was_consumed(spent)
 
 
 # ---------------------------------------------------------------------------
 # The confirmation gate
 # ---------------------------------------------------------------------------
+
 
 def test_the_initiator_cannot_send_before_confirming():
     responder, _, _ = make_responder()
@@ -223,7 +231,7 @@ def test_the_initiator_cannot_send_before_confirming():
 
     assert not initiator.is_confirmed
     with pytest.raises(KeyConfirmationRequired):
-        initiator.send(b'too early')
+        initiator.send(b"too early")
     with pytest.raises(KeyConfirmationRequired):
         initiator.state
 
@@ -264,7 +272,7 @@ def test_a_forged_confirmation_is_refused_and_stays_refused():
         initiator.confirm(foreign_confirmation)
     assert not initiator.is_confirmed
     with pytest.raises(KeyConfirmationRequired):
-        initiator.send(b'still locked')
+        initiator.send(b"still locked")
     # Retrying the same bad confirmation fails the same way; it is not quietly
     # accepted on the second pass.
     with pytest.raises(KeyConfirmationFailed):
@@ -284,12 +292,10 @@ def test_confirming_on_the_responder_side_is_refused():
 def test_confirming_twice_is_refused():
     pair_responder, _, _ = make_responder()
     initiator_private, _ = X3DH().generate_identity_keys()
-    initiator, init_frame = initiate(
-        initiator_private, pair_responder.publish_bundle()
-    )
+    initiator, init_frame = initiate(initiator_private, pair_responder.publish_bundle())
     _, confirmation = accept(pair_responder, init_frame)
     initiator.confirm(confirmation)
-    initiator.send(b'ok')
+    initiator.send(b"ok")
     with pytest.raises(SessionError):
         initiator.confirm(confirmation)
 
@@ -298,9 +304,10 @@ def test_confirming_twice_is_refused():
 # Associated data
 # ---------------------------------------------------------------------------
 
+
 def test_both_sides_derive_the_same_associated_data():
     pair = handshake()
-    assert pair['initiator'].associated_data == pair['responder'].associated_data
+    assert pair["initiator"].associated_data == pair["responder"].associated_data
 
 
 def test_associated_data_binds_both_identities_and_the_version():
@@ -328,15 +335,17 @@ def test_the_associated_data_encodes_the_role_through_the_key_order():
     on its own is not (see the next test).
     """
     pair = handshake()
-    initiator = pair['initiator']
+    initiator = pair["initiator"]
 
-    assert session_associated_data(
-        pair['initiator_public'], pair['responder_public']
-    ) == initiator.associated_data
+    assert (
+        session_associated_data(pair["initiator_public"], pair["responder_public"])
+        == initiator.associated_data
+    )
     # The same two keys in the other order is a different value.
-    assert session_associated_data(
-        pair['responder_public'], pair['initiator_public']
-    ) != initiator.associated_data
+    assert (
+        session_associated_data(pair["responder_public"], pair["initiator_public"])
+        != initiator.associated_data
+    )
 
 
 def test_associated_data_rejects_non_keys():
@@ -350,16 +359,16 @@ def test_associated_data_rejects_non_keys():
 def test_a_frame_from_a_different_session_does_not_decrypt():
     """The reason the associated data is derived rather than left empty."""
     pair = handshake()
-    initiator = pair['initiator']
-    frame = initiator.send(b'for this conversation only')
+    initiator = pair["initiator"]
+    frame = initiator.send(b"for this conversation only")
 
     # Same ratchet, same key schedule, different associated data: exactly the
     # case a replay across sessions would produce.
     impostor = Session.from_state(
         initiator.state,
         is_initiator=True,
-        local_identity=pair['initiator_public'],
-        peer_identity=pair['responder_public'],
+        local_identity=pair["initiator_public"],
+        peer_identity=pair["responder_public"],
     )
     with pytest.raises(DecryptionError):
         impostor.receive(frame)
@@ -367,49 +376,50 @@ def test_a_frame_from_a_different_session_does_not_decrypt():
 
 def test_identities_are_reported_from_the_right_side():
     pair = handshake()
-    assert pair['initiator'].local_identity == pair['initiator_public']
-    assert pair['initiator'].peer_identity == pair['responder_public']
-    assert pair['responder'].local_identity == pair['responder_public']
-    assert pair['responder'].peer_identity == pair['initiator_public']
+    assert pair["initiator"].local_identity == pair["initiator_public"]
+    assert pair["initiator"].peer_identity == pair["responder_public"]
+    assert pair["responder"].local_identity == pair["responder_public"]
+    assert pair["responder"].peer_identity == pair["initiator_public"]
 
 
 # ---------------------------------------------------------------------------
 # Persistence
 # ---------------------------------------------------------------------------
 
+
 def test_a_restored_session_continues_the_conversation():
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
+    initiator, responder_session = pair["initiator"], pair["responder"]
     # A message in flight across the restart, which the restored pair has to
     # pick up from the middle.
-    in_flight = initiator.send(b'before the restart')
-    assert responder_session.receive(in_flight) == b'before the restart'
+    in_flight = initiator.send(b"before the restart")
+    assert responder_session.receive(in_flight) == b"before the restart"
 
     revived_initiator = Session.from_state(
         initiator.state,
         is_initiator=True,
-        local_identity=pair['initiator_public'],
-        peer_identity=pair['responder_public'],
+        local_identity=pair["initiator_public"],
+        peer_identity=pair["responder_public"],
     )
     revived_responder = Session.from_state(
         responder_session.state,
         is_initiator=False,
-        local_identity=pair['responder_public'],
-        peer_identity=pair['initiator_public'],
+        local_identity=pair["responder_public"],
+        peer_identity=pair["initiator_public"],
     )
-    assert revived_responder.receive(revived_initiator.send(b'after')) == b'after'
-    assert revived_initiator.receive(revived_responder.send(b'reply')) == b'reply'
+    assert revived_responder.receive(revived_initiator.send(b"after")) == b"after"
+    assert revived_initiator.receive(revived_responder.send(b"reply")) == b"reply"
 
 
 def test_a_restored_session_keeps_its_associated_data():
     pair = handshake()
     revived = Session.from_state(
-        pair['initiator'].state,
+        pair["initiator"].state,
         is_initiator=True,
-        local_identity=pair['initiator_public'],
-        peer_identity=pair['responder_public'],
+        local_identity=pair["initiator_public"],
+        peer_identity=pair["responder_public"],
     )
-    assert revived.associated_data == pair['initiator'].associated_data
+    assert revived.associated_data == pair["initiator"].associated_data
     # Restoring is not a handshake, so there is nothing left to confirm.
     assert revived.is_confirmed
     assert revived.one_time_prekey_id is None
@@ -427,7 +437,7 @@ def test_a_state_that_cannot_belong_to_the_claimed_role_is_refused():
     _, init_frame = initiate(initiator_private, bundle)
     responder_session, _ = accept(responder, init_frame)
     virgin = responder_session.state.serialize()
-    assert virgin['dh_remote_pub'] is None
+    assert virgin["dh_remote_pub"] is None
 
     with pytest.raises(SessionError):
         Session.from_state(
@@ -445,15 +455,15 @@ def test_swapping_the_two_identities_when_restoring_is_caught_loudly():
     file.
     """
     pair = handshake()
-    initiator = pair['initiator']
+    initiator = pair["initiator"]
     document = initiator.state.serialize()
-    frame = initiator.send(b'a message')
+    frame = initiator.send(b"a message")
 
     swapped = Session.from_state(
         document,
         is_initiator=True,
-        local_identity=pair['responder_public'],
-        peer_identity=pair['initiator_public'],
+        local_identity=pair["responder_public"],
+        peer_identity=pair["initiator_public"],
     )
     assert swapped.associated_data != initiator.associated_data
     with pytest.raises(DecryptionError):
@@ -470,19 +480,19 @@ def test_the_role_alone_is_enough_to_break_the_associated_data():
     a different associated data and every message fails at the AEAD.
     """
     pair = handshake()
-    responder_session = pair['responder']
+    responder_session = pair["responder"]
     # One message has to arrive first, otherwise the responder's state still has
     # no remote ratchet key and the separate provable check in from_state fires
     # first.
-    assert responder_session.receive(pair['initiator'].send(b'first')) == b'first'
+    assert responder_session.receive(pair["initiator"].send(b"first")) == b"first"
     document = responder_session.state.serialize()
-    frame = pair['initiator'].send(b'a message')
+    frame = pair["initiator"].send(b"a message")
 
     mislabelled = Session.from_state(
         document,
         is_initiator=True,
-        local_identity=pair['responder_public'],
-        peer_identity=pair['initiator_public'],
+        local_identity=pair["responder_public"],
+        peer_identity=pair["initiator_public"],
     )
     assert mislabelled.associated_data != responder_session.associated_data
     with pytest.raises(DecryptionError):
@@ -501,35 +511,35 @@ def test_a_wrong_role_compensated_by_swapped_identities_is_not_caught():
     Pretending otherwise would hide the gap rather than close it.
     """
     pair = handshake()
-    responder_session = pair['responder']
-    assert responder_session.receive(pair['initiator'].send(b'first')) == b'first'
+    responder_session = pair["responder"]
+    assert responder_session.receive(pair["initiator"].send(b"first")) == b"first"
     document = responder_session.state.serialize()
-    frame = pair['initiator'].send(b'a message')
+    frame = pair["initiator"].send(b"a message")
 
     mislabelled = Session.from_state(
         document,
         is_initiator=True,
-        local_identity=pair['initiator_public'],
-        peer_identity=pair['responder_public'],
+        local_identity=pair["initiator_public"],
+        peer_identity=pair["responder_public"],
     )
     assert mislabelled.associated_data == responder_session.associated_data
-    assert mislabelled.receive(frame) == b'a message'
+    assert mislabelled.receive(frame) == b"a message"
     # This side is the responder; the restored session calls the initiator's key
     # its own.
-    assert mislabelled.local_identity == pair['initiator_public']
-    assert mislabelled.local_identity == pair['responder'].peer_identity
+    assert mislabelled.local_identity == pair["initiator_public"]
+    assert mislabelled.local_identity == pair["responder"].peer_identity
 
 
 def test_from_state_refuses_a_state_from_another_protocol_version():
     pair = handshake()
-    document = pair['initiator'].state.serialize()
-    document['version'] = PROTOCOL_VERSION - 1
+    document = pair["initiator"].state.serialize()
+    document["version"] = PROTOCOL_VERSION - 1
     with pytest.raises(IncompatibleSessionError):
         Session.from_state(
             document,
             is_initiator=True,
-            local_identity=pair['initiator_public'],
-            peer_identity=pair['responder_public'],
+            local_identity=pair["initiator_public"],
+            peer_identity=pair["responder_public"],
         )
 
 
@@ -538,16 +548,16 @@ def test_a_session_needs_exactly_one_way_to_build_its_ratchet():
     with pytest.raises(SessionError):
         Session(
             is_initiator=True,
-            initiator_identity=pair['initiator_public'],
-            responder_identity=pair['responder_public'],
+            initiator_identity=pair["initiator_public"],
+            responder_identity=pair["responder_public"],
         )
     with pytest.raises(SessionError):
         Session(
             is_initiator=True,
-            ratchet=DoubleRatchet.from_state(pair['initiator'].state),
+            ratchet=DoubleRatchet.from_state(pair["initiator"].state),
             ratchet_factory=lambda: None,
-            initiator_identity=pair['initiator_public'],
-            responder_identity=pair['responder_public'],
+            initiator_identity=pair["initiator_public"],
+            responder_identity=pair["responder_public"],
         )
 
 
@@ -579,6 +589,7 @@ def test_a_role_that_contradicts_its_handshake_is_refused():
 # Failures at the handshake boundary
 # ---------------------------------------------------------------------------
 
+
 def test_a_tampered_bundle_never_reaches_the_ratchet():
     """The signature check happens before any bundle key is used."""
     responder, responder_public, _ = make_responder()
@@ -586,9 +597,7 @@ def test_a_tampered_bundle_never_reaches_the_ratchet():
     initiator_private, _ = X3DH().generate_identity_keys()
 
     forged = PublicKey(bytes(bundle.signed_prekey))
-    forged = PublicKey(
-        (bytes(forged)[:-1] + bytes([bytes(forged)[-1] ^ 1]))
-    )
+    forged = PublicKey((bytes(forged)[:-1] + bytes([bytes(forged)[-1] ^ 1])))
     tampered = PreKeyBundle(
         identity_key=bundle.identity_key,
         signed_prekey=forged,
@@ -617,9 +626,7 @@ def test_a_whole_bundle_substitution_is_possible_and_silent():
     honest = responder.publish_bundle()
 
     evil_identity, evil_public = X3DH().generate_identity_keys()
-    _, evil_spk_public, evil_signature = X3DH().generate_signed_prekey(
-        evil_identity
-    )
+    _, evil_spk_public, evil_signature = X3DH().generate_signed_prekey(evil_identity)
     substituted = PreKeyBundle(
         identity_key=evil_public,
         signed_prekey=evil_spk_public,
@@ -641,7 +648,7 @@ def test_a_whole_bundle_substitution_is_possible_and_silent():
     # And the session is usable, so nothing about the failure announces itself.
     assert initiator.is_confirmed is False
     with pytest.raises(KeyConfirmationRequired):
-        initiator.send(b'to the wrong person')
+        initiator.send(b"to the wrong person")
 
 
 def test_a_spent_prekey_ends_the_second_handshake():
@@ -675,7 +682,7 @@ def test_a_retired_bundle_is_refused_when_the_caller_says_so():
 
 def test_the_responder_will_not_accept_a_message_frame_as_a_handshake():
     pair = handshake()
-    frame = pair['initiator'].send(b'not a handshake')
+    frame = pair["initiator"].send(b"not a handshake")
     responder, _, _ = make_responder()
     with pytest.raises(UnknownMessageKind):
         accept(responder, frame)
@@ -684,7 +691,7 @@ def test_the_responder_will_not_accept_a_message_frame_as_a_handshake():
 def test_a_session_refuses_a_non_bytes_message():
     pair = handshake()
     with pytest.raises(SessionError):
-        pair['initiator'].send('a string is not bytes')
+        pair["initiator"].send("a string is not bytes")
 
 
 def test_the_specified_associated_data_still_reaches_the_handshake():
@@ -700,17 +707,17 @@ def test_the_specified_associated_data_still_reaches_the_handshake():
     bundle = responder.publish_bundle()
     initiator_private, _ = X3DH().generate_identity_keys()
     initiator, init_frame = initiate(
-        initiator_private, bundle, associated_data=b'conversation-42'
+        initiator_private, bundle, associated_data=b"conversation-42"
     )
     responder_session, confirmation = accept(
-        responder, init_frame, associated_data=b'conversation-42'
+        responder, init_frame, associated_data=b"conversation-42"
     )
     initiator.confirm(confirmation)
-    assert responder_session.receive(initiator.send(b'hello')) == b'hello'
+    assert responder_session.receive(initiator.send(b"hello")) == b"hello"
 
     # Same keys, mismatched context: the confirmation must not verify.
     other, other_init = initiate(
-        initiator_private, bundle, associated_data=b'conversation-43'
+        initiator_private, bundle, associated_data=b"conversation-43"
     )
     with pytest.raises(KeyConfirmationFailed):
         other.confirm(confirmation)
@@ -729,7 +736,7 @@ def test_a_bundle_carrying_a_low_order_signed_prekey_is_refused():
     """
     x3dh = X3DH()
     identity_private, identity_public = x3dh.generate_identity_keys()
-    low_order = PublicKey(b'\x00' * 32)
+    low_order = PublicKey(b"\x00" * 32)
     bundle = PreKeyBundle(
         identity_key=identity_public,
         signed_prekey=low_order,
@@ -751,15 +758,15 @@ def test_private_key_types_do_not_leak_into_the_wire():
     a frame anyone can decrypt.
     """
     pair = handshake()
-    initiator, responder_session = pair['initiator'], pair['responder']
+    initiator, responder_session = pair["initiator"], pair["responder"]
     secrets = [
-        bytes(pair['initiator_private']),
+        bytes(pair["initiator_private"]),
         bytes(initiator.state.dh_local_priv),
         bytes(responder_session.state.dh_local_priv),
     ]
     # The responder cannot encrypt before it has heard the initiator's ratchet
     # key, so the first message has to be delivered.
-    responder_session.receive(initiator.send(b'first'))
-    for frame in (initiator.send(b'x'), responder_session.send(b'y')):
+    responder_session.receive(initiator.send(b"first"))
+    for frame in (initiator.send(b"x"), responder_session.send(b"y")):
         for secret in secrets:
             assert secret not in frame

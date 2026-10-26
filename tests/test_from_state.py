@@ -29,7 +29,7 @@ from src.crypto.double_ratchet import (
 )
 
 #: The three counters, bounded identically by SessionState.validate.
-COUNTERS = ['send_msg_count', 'recv_msg_count', 'prev_send_count']
+COUNTERS = ["send_msg_count", "recv_msg_count", "prev_send_count"]
 
 
 def create_session_pair():
@@ -97,10 +97,10 @@ class TestRestoreContinuesSession:
         before = alice.state.serialize()
         restored = DoubleRatchet.from_state(before)
 
-        assert restored.state.root_key == bytes.fromhex(before['root_key'])
-        assert restored.state.send_chain_key == bytes.fromhex(before['send_chain_key'])
-        assert restored.state.dh_local_pub == bytes.fromhex(before['dh_local_pub'])
-        assert restored.state.dh_local_priv == bytes.fromhex(before['dh_local_priv'])
+        assert restored.state.root_key == bytes.fromhex(before["root_key"])
+        assert restored.state.send_chain_key == bytes.fromhex(before["send_chain_key"])
+        assert restored.state.dh_local_pub == bytes.fromhex(before["dh_local_pub"])
+        assert restored.state.dh_local_priv == bytes.fromhex(before["dh_local_priv"])
 
     def test_round_trip_through_several_dh_ratchets(self):
         """Both sides reload repeatedly, across a chain of DH ratchets."""
@@ -146,7 +146,7 @@ class TestRestoreContinuesSession:
         _alice, bob = create_session_pair()
         restored = DoubleRatchet.from_state(bob.state.serialize())
 
-        with pytest.raises(InvalidSessionStateError, match='remote DH public key'):
+        with pytest.raises(InvalidSessionStateError, match="remote DH public key"):
             restored.encrypt(b"unsolicited")
 
     def test_accepts_a_session_state_object(self):
@@ -174,8 +174,8 @@ class TestRestoreContinuesSession:
         assert restored.state is not snapshot
         assert restored.state.skipped_keys is not snapshot.skipped_keys
 
-        snapshot.root_key = b'\x00' * 32
-        assert restored.state.root_key != b'\x00' * 32
+        snapshot.root_key = b"\x00" * 32
+        assert restored.state.root_key != b"\x00" * 32
 
 
 class TestSkippedKeysAcrossRestore:
@@ -217,7 +217,7 @@ class TestSkippedKeysAcrossRestore:
 
         restored = DoubleRatchet.from_state(bob.state.serialize())
 
-        assert 'skipped_keys' not in bob.state.serialize()
+        assert "skipped_keys" not in bob.state.serialize()
         assert restored.state.skipped_keys == OrderedDict()
         # Without the retained key the message is not merely mis-decrypted: the
         # chain has already moved past it, so it is refused as a duplicate.
@@ -242,50 +242,50 @@ class TestDamagedStateIsRefused:
             dh_local_pub=bytes(impostor.public_key).hex(),
         )
 
-        with pytest.raises(InvalidSessionStateError, match='dh_local_pub'):
+        with pytest.raises(InvalidSessionStateError, match="dh_local_pub"):
             DoubleRatchet.from_state(payload)
 
     def test_missing_public_key_field(self):
         alice, _bob = create_session_pair()
         payload = alice.state.serialize()
-        del payload['dh_local_pub']
+        del payload["dh_local_pub"]
 
         with pytest.raises(InvalidSessionStateError):
             DoubleRatchet.from_state(payload)
 
     def test_truncated_private_key(self):
         alice, _bob = create_session_pair()
-        payload = tamper(alice.state.serialize(), dh_local_priv='00' * 31)
+        payload = tamper(alice.state.serialize(), dh_local_priv="00" * 31)
 
-        with pytest.raises(InvalidSessionStateError, match='dh_local_priv'):
+        with pytest.raises(InvalidSessionStateError, match="dh_local_priv"):
             DoubleRatchet.from_state(payload)
 
     def test_wrong_length_root_key(self):
         alice, _bob = create_session_pair()
-        payload = tamper(alice.state.serialize(), root_key='00' * 16)
+        payload = tamper(alice.state.serialize(), root_key="00" * 16)
 
-        with pytest.raises(InvalidSessionStateError, match='root_key'):
+        with pytest.raises(InvalidSessionStateError, match="root_key"):
             DoubleRatchet.from_state(payload)
 
     def test_wrong_length_chain_key(self):
         alice, _bob = create_session_pair()
-        payload = tamper(alice.state.serialize(), send_chain_key='00' * 31)
+        payload = tamper(alice.state.serialize(), send_chain_key="00" * 31)
 
-        with pytest.raises(InvalidSessionStateError, match='send_chain_key'):
+        with pytest.raises(InvalidSessionStateError, match="send_chain_key"):
             DoubleRatchet.from_state(payload)
 
     def test_wrong_length_remote_public_key(self):
         alice, _bob = create_session_pair()
-        payload = tamper(alice.state.serialize(), dh_remote_pub='00' * 31)
+        payload = tamper(alice.state.serialize(), dh_remote_pub="00" * 31)
 
-        with pytest.raises(InvalidSessionStateError, match='dh_remote_pub'):
+        with pytest.raises(InvalidSessionStateError, match="dh_remote_pub"):
             DoubleRatchet.from_state(payload)
 
     def test_non_hex_field(self):
         alice, _bob = create_session_pair()
-        payload = tamper(alice.state.serialize(), root_key='not hex at all')
+        payload = tamper(alice.state.serialize(), root_key="not hex at all")
 
-        with pytest.raises(InvalidSessionStateError, match='hex'):
+        with pytest.raises(InvalidSessionStateError, match="hex"):
             DoubleRatchet.from_state(payload)
 
     def test_field_of_wrong_type(self):
@@ -295,7 +295,7 @@ class TestDamagedStateIsRefused:
         with pytest.raises(InvalidSessionStateError):
             DoubleRatchet.from_state(payload)
 
-    @pytest.mark.parametrize('counter', COUNTERS)
+    @pytest.mark.parametrize("counter", COUNTERS)
     def test_negative_counter(self, counter):
         alice, _bob = create_session_pair()
         payload = tamper(alice.state.serialize(), **{counter: -1})
@@ -303,15 +303,15 @@ class TestDamagedStateIsRefused:
         with pytest.raises(InvalidSessionStateError, match=counter):
             DoubleRatchet.from_state(payload)
 
-    @pytest.mark.parametrize('counter', COUNTERS)
+    @pytest.mark.parametrize("counter", COUNTERS)
     def test_counter_beyond_the_wire_range(self, counter):
         alice, _bob = create_session_pair()
-        payload = tamper(alice.state.serialize(), **{counter: 2 ** 32})
+        payload = tamper(alice.state.serialize(), **{counter: 2**32})
 
         with pytest.raises(InvalidSessionStateError, match=counter):
             DoubleRatchet.from_state(payload)
 
-    @pytest.mark.parametrize('counter', COUNTERS)
+    @pytest.mark.parametrize("counter", COUNTERS)
     def test_boolean_counter(self, counter):
         """
         ``bool`` is an ``int`` subclass, so ``True`` slips past a range check
@@ -335,12 +335,12 @@ class TestDamagedStateIsRefused:
     def test_missing_version(self):
         alice, _bob = create_session_pair()
         payload = alice.state.serialize()
-        del payload['version']
+        del payload["version"]
 
         with pytest.raises(IncompatibleSessionError):
             DoubleRatchet.from_state(payload)
 
-    @pytest.mark.parametrize('junk', [None, 42, b'bytes', 'a string', ['a', 'list']])
+    @pytest.mark.parametrize("junk", [None, 42, b"bytes", "a string", ["a", "list"]])
     def test_junk_instead_of_state(self, junk):
         with pytest.raises(InvalidSessionStateError):
             DoubleRatchet.from_state(junk)
@@ -350,10 +350,10 @@ class TestDamagedStateIsRefused:
         sent = [alice.encrypt(f"msg {i}".encode()) for i in range(3)]
         bob.decrypt(*sent[2])
         payload = bob.state.serialize(include_message_keys=True)
-        assert payload['skipped_keys']
+        assert payload["skipped_keys"]
 
-        payload['skipped_keys'][0][2] = '00' * 16
-        with pytest.raises(InvalidSessionStateError, match='skipped_keys message key'):
+        payload["skipped_keys"][0][2] = "00" * 16
+        with pytest.raises(InvalidSessionStateError, match="skipped_keys message key"):
             DoubleRatchet.from_state(payload)
 
     def test_malformed_skipped_key_record(self):
@@ -362,8 +362,8 @@ class TestDamagedStateIsRefused:
         bob.decrypt(*sent[2])
         payload = bob.state.serialize(include_message_keys=True)
 
-        payload['skipped_keys'][0] = [payload['skipped_keys'][0][0], 1]
-        with pytest.raises(InvalidSessionStateError, match='skipped_keys'):
+        payload["skipped_keys"][0] = [payload["skipped_keys"][0][0], 1]
+        with pytest.raises(InvalidSessionStateError, match="skipped_keys"):
             DoubleRatchet.from_state(payload)
 
     def test_more_skipped_keys_than_the_limit(self):
@@ -373,13 +373,13 @@ class TestDamagedStateIsRefused:
         materialise an unbounded map of message keys.
         """
         alice, _bob = create_session_pair()
-        record = [alice.state.dh_remote_pub.hex(), 0, '00' * 32]
+        record = [alice.state.dh_remote_pub.hex(), 0, "00" * 32]
         payload = tamper(
             alice.state.serialize(),
             skipped_keys=[record] * (MAX_STORED_SKIPPED + 1),
         )
 
-        with pytest.raises(InvalidSessionStateError, match='MAX_STORED_SKIPPED'):
+        with pytest.raises(InvalidSessionStateError, match="MAX_STORED_SKIPPED"):
             DoubleRatchet.from_state(payload)
 
     def test_skipped_keys_at_the_limit_are_accepted(self):
@@ -389,7 +389,7 @@ class TestDamagedStateIsRefused:
         """
         alice, _bob = create_session_pair()
         records = [
-            [alice.state.dh_remote_pub.hex(), i, '00' * 32]
+            [alice.state.dh_remote_pub.hex(), i, "00" * 32]
             for i in range(MAX_STORED_SKIPPED)
         ]
         payload = tamper(alice.state.serialize(), skipped_keys=records)
@@ -452,22 +452,21 @@ class TestRestoreThroughSessionStore:
         from src.storage.store import SessionStore
 
         alice, peer = create_session_pair()
-        store = SessionStore(str(tmp_path), 'correct horse battery staple')
+        store = SessionStore(str(tmp_path), "correct horse battery staple")
         # The peer's half of the session is only ever reached through the file.
         # Keeping a live ratchet around and reloading from it anyway would prove
         # nothing, so the loop below is driven entirely by what was saved.
-        assert peer.decrypt(*alice.encrypt(b'before any restart')) == \
-            b'before any restart'
-        store.save('bob', peer.state)
+        assert (
+            peer.decrypt(*alice.encrypt(b"before any restart")) == b"before any restart"
+        )
+        store.save("bob", peer.state)
         del peer
 
         for round_number in range(3):
-            reloaded = DoubleRatchet.from_state(
-                store.load('bob', PROTOCOL_VERSION)
-            )
-            message = f'after restart {round_number}'.encode()
+            reloaded = DoubleRatchet.from_state(store.load("bob", PROTOCOL_VERSION))
+            message = f"after restart {round_number}".encode()
             assert reloaded.decrypt(*alice.encrypt(message)) == message
-            store.save('bob', reloaded.state)
+            store.save("bob", reloaded.state)
             # Drop the live object again: the next round must start from the
             # file, not from anything still in memory.
             del reloaded
@@ -481,16 +480,16 @@ class TestRestoreThroughSessionStore:
         from src.storage.store import SessionStore
 
         alice, bob = create_session_pair()
-        store = SessionStore(str(tmp_path), 'pw')
-        bob.decrypt(*alice.encrypt(b'warm up'))
-        store.save('bob', bob.state)
+        store = SessionStore(str(tmp_path), "pw")
+        bob.decrypt(*alice.encrypt(b"warm up"))
+        store.save("bob", bob.state)
 
-        state = store.load('bob', PROTOCOL_VERSION)
+        state = store.load("bob", PROTOCOL_VERSION)
         state.dh_local_pub = bytes(public.PrivateKey.generate().public_key)
-        store.save('bob', state)  # the container is sealed and authenticated
+        store.save("bob", state)  # the container is sealed and authenticated
 
-        with pytest.raises(InvalidSessionStateError, match='dh_local_pub'):
-            DoubleRatchet.from_state(store.load('bob', PROTOCOL_VERSION))
+        with pytest.raises(InvalidSessionStateError, match="dh_local_pub"):
+            DoubleRatchet.from_state(store.load("bob", PROTOCOL_VERSION))
 
 
 class TestValidationIsNotBypassable:
@@ -505,7 +504,7 @@ class TestValidationIsNotBypassable:
         state = alice.state
         state.dh_local_pub = bytes(public.PrivateKey.generate().public_key)
 
-        with pytest.raises(InvalidSessionStateError, match='dh_local_pub'):
+        with pytest.raises(InvalidSessionStateError, match="dh_local_pub"):
             state.validate()
 
     def test_validate_accepts_an_untouched_state(self):

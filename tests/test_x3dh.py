@@ -48,8 +48,7 @@ def make_responder(prekey_count=3, pq_prekey_count=4):
         signed_prekey_private=spk_private,
         prekey_store=store,
         pq_prekey_store=(
-            None if pq_prekey_count is None
-            else stocked_pq_store(pq_prekey_count)
+            None if pq_prekey_count is None else stocked_pq_store(pq_prekey_count)
         ),
     )
     return x3dh, responder, store, identity_public
@@ -69,7 +68,11 @@ class TestAgreement:
 
         assert len(state.dh_parts) == 5
         assert [part.label for part in state.dh_parts] == [
-            LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_EK_OPK, LABEL_KEM,
+            LABEL_IK_SPK,
+            LABEL_EK_IK,
+            LABEL_EK_SPK,
+            LABEL_EK_OPK,
+            LABEL_KEM,
         ]
         assert state.dh_parts == responder_state.dh_parts
         assert state.master_key() == responder_state.master_key()
@@ -105,7 +108,10 @@ class TestAgreement:
         responder_state = responder.handle_init(init)
 
         assert [part.label for part in state.dh_parts] == [
-            LABEL_IK_SPK, LABEL_EK_IK, LABEL_EK_SPK, LABEL_KEM,
+            LABEL_IK_SPK,
+            LABEL_EK_IK,
+            LABEL_EK_SPK,
+            LABEL_KEM,
         ]
         assert state.master_key() == responder_state.master_key()
         assert state.is_post_quantum
@@ -123,9 +129,7 @@ class TestAgreement:
             signed_prekey_signature=signature,
         )
         state, init = x3dh.initiate_handshake(alice_private, bundle)
-        responder_state = x3dh.receive_handshake(
-            bob_private, spk_private, None, init
-        )
+        responder_state = x3dh.receive_handshake(bob_private, spk_private, None, init)
 
         assert len(state.dh_parts) == 3
         assert state.dh_parts == responder_state.dh_parts
@@ -137,7 +141,9 @@ class TestAgreement:
 
         secrets = set()
         for _ in range(5):
-            state, init = x3dh.initiate_handshake(alice_private, responder.publish_bundle())
+            state, init = x3dh.initiate_handshake(
+                alice_private, responder.publish_bundle()
+            )
             responder.handle_init(init)
             secrets.add(state.master_key())
         assert len(secrets) == 5
@@ -276,9 +282,7 @@ class TestAgreement:
         alice_private, _ = x3dh.generate_identity_keys()
         session, init = x3dh.begin(
             alice_private,
-            responder.publish_bundle(
-                allow_no_one_time_prekey=True, allow_no_pq=True
-            ),
+            responder.publish_bundle(allow_no_one_time_prekey=True, allow_no_pq=True),
         )
         responder_session = responder.respond(init)
         session.verify_key_confirmation(responder_session.make_key_confirmation())
@@ -311,8 +315,7 @@ class TestKeyDerivation:
         if include_kem:
             labels = labels[:3] + [LABEL_KEM]
         return [
-            DhPart(label, bytes([index + 1]) * 32)
-            for index, label in enumerate(labels)
+            DhPart(label, bytes([index + 1]) * 32) for index, label in enumerate(labels)
         ]
 
     def test_master_key_is_deterministic(self):
@@ -321,8 +324,8 @@ class TestKeyDerivation:
 
     def test_context_separates_keys(self):
         parts = self.parts(4)
-        first = X3DH.derive_master_key(parts, context=b'ctx-a')
-        second = X3DH.derive_master_key(parts, context=b'ctx-b')
+        first = X3DH.derive_master_key(parts, context=b"ctx-a")
+        second = X3DH.derive_master_key(parts, context=b"ctx-b")
         assert first != second
 
     def test_a_buffer_is_rejected(self):
@@ -335,7 +338,7 @@ class TestKeyDerivation:
         """
         parts = self.parts(4)
         with pytest.raises(TypeError):
-            X3DH.derive_master_key(b''.join(part.value for part in parts))
+            X3DH.derive_master_key(b"".join(part.value for part in parts))
 
     def test_bare_outputs_are_rejected(self):
         """
@@ -347,7 +350,7 @@ class TestKeyDerivation:
         quietly reintroducing the ambiguity.
         """
         with pytest.raises(TypeError):
-            X3DH.derive_master_key([b'\x01' * 32] * 4)
+            X3DH.derive_master_key([b"\x01" * 32] * 4)
 
     def test_an_ml_kem_contribution_is_distinguishable_from_a_prekey_one(self):
         """
@@ -369,12 +372,16 @@ class TestKeyDerivation:
         assert len(prekey_part.value) == len(kem_part.value)
 
     def test_a_different_label_for_the_same_value_is_a_different_key(self):
-        first = X3DH.derive_master_key([
-            DhPart(LABEL_EK_OPK, b'\x07' * 32),
-        ])
-        second = X3DH.derive_master_key([
-            DhPart(LABEL_KEM, b'\x07' * 32),
-        ])
+        first = X3DH.derive_master_key(
+            [
+                DhPart(LABEL_EK_OPK, b"\x07" * 32),
+            ]
+        )
+        second = X3DH.derive_master_key(
+            [
+                DhPart(LABEL_KEM, b"\x07" * 32),
+            ]
+        )
         assert first != second
 
     def test_duplicate_labels_are_rejected(self):
@@ -384,10 +391,12 @@ class TestKeyDerivation:
         implementation nor the specification has an opinion about.
         """
         with pytest.raises(ValueError):
-            X3DH.derive_master_key([
-                DhPart(LABEL_EK_SPK, b'\x01' * 32),
-                DhPart(LABEL_EK_SPK, b'\x02' * 32),
-            ])
+            X3DH.derive_master_key(
+                [
+                    DhPart(LABEL_EK_SPK, b"\x01" * 32),
+                    DhPart(LABEL_EK_SPK, b"\x02" * 32),
+                ]
+            )
 
     def test_rejects_an_empty_part_list(self):
         with pytest.raises(ValueError):
@@ -401,10 +410,10 @@ class TestKeyDerivation:
         created, the other stops it being used.
         """
         with pytest.raises(InvalidHandshakeError):
-            DhPart(LABEL_IK_SPK, b'\x00' * 31)
+            DhPart(LABEL_IK_SPK, b"\x00" * 31)
 
-        forged = DhPart(LABEL_IK_SPK, b'\x00' * 32)
-        object.__setattr__(forged, 'value', b'\x00' * 31)
+        forged = DhPart(LABEL_IK_SPK, b"\x00" * 32)
+        object.__setattr__(forged, "value", b"\x00" * 31)
         with pytest.raises(ValueError):
             X3DH.derive_master_key([forged])
 
@@ -430,7 +439,7 @@ class TestKeyHandling:
         x3dh = X3DH()
         private = PrivateKey.generate()
         with pytest.raises(InvalidKeyError):
-            x3dh._dh(private, b'\x00' * 32)
+            x3dh._dh(private, b"\x00" * 32)
 
     def test_identity_conversion_is_stable(self):
         """The Ed25519 -> X25519 conversion must be deterministic."""
@@ -438,6 +447,8 @@ class TestKeyHandling:
             identity_private_x25519,
             identity_public_x25519,
         )
+
         signing_key, verify_key = X3DH.generate_identity_keys()
-        assert bytes(identity_private_x25519(signing_key).public_key) == \
-            bytes(identity_public_x25519(verify_key))
+        assert bytes(identity_private_x25519(signing_key).public_key) == bytes(
+            identity_public_x25519(verify_key)
+        )

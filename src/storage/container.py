@@ -43,7 +43,7 @@ import nacl.utils
 
 from ..crypto.kdf import hkdf as hkdf_sha256
 
-MAGIC = b'ANARCHY\x01'
+MAGIC = b"ANARCHY\x01"
 CONTAINER_VERSION = 1
 KDF_SCRYPT = 1
 
@@ -56,7 +56,7 @@ _TAG_LEN = 16
 _KEY_INFO = b"anarchy-container-v1"
 
 #: Serialise the epoch big-endian so byte order is not a platform detail.
-_EPOCH_STRUCT = struct.Struct('>Q')
+_EPOCH_STRUCT = struct.Struct(">Q")
 
 
 class StorageError(Exception):
@@ -94,13 +94,13 @@ class KdfParams:
     def __post_init__(self) -> None:
         if not self.MIN_N_LOG2 <= self.n_log2 <= self.MAX_N_LOG2:
             raise ValueError(
-                f'n_log2 must be {self.MIN_N_LOG2}..{self.MAX_N_LOG2}, '
-                f'got {self.n_log2}'
+                f"n_log2 must be {self.MIN_N_LOG2}..{self.MAX_N_LOG2}, "
+                f"got {self.n_log2}"
             )
         if not 1 <= self.r <= 32:
-            raise ValueError(f'r out of range: {self.r}')
+            raise ValueError(f"r out of range: {self.r}")
         if not 1 <= self.p <= 16:
-            raise ValueError(f'p out of range: {self.p}')
+            raise ValueError(f"p out of range: {self.p}")
 
     @property
     def n(self) -> int:
@@ -119,7 +119,7 @@ class KdfParams:
         return bytes((KDF_SCRYPT, self.n_log2, self.r, self.p))
 
     @classmethod
-    def from_header(cls, raw: bytes) -> 'KdfParams':
+    def from_header(cls, raw: bytes) -> "KdfParams":
         """
         Rebuild parameters read from an untrusted header.
 
@@ -128,14 +128,14 @@ class KdfParams:
         the boundary should only speak in storage-domain exceptions.
         """
         if len(raw) != 4:
-            raise MalformedContainer('truncated kdf parameters')
+            raise MalformedContainer("truncated kdf parameters")
         kdf_id, n_log2, r, p = raw
         if kdf_id != KDF_SCRYPT:
-            raise MalformedContainer(f'unknown kdf id {kdf_id}')
+            raise MalformedContainer(f"unknown kdf id {kdf_id}")
         try:
             return cls(n_log2=n_log2, r=r, p=p)
         except ValueError as exc:
-            raise MalformedContainer(f'implausible kdf parameters: {exc}') from exc
+            raise MalformedContainer(f"implausible kdf parameters: {exc}") from exc
 
 
 DEFAULT_KDF = KdfParams()
@@ -150,9 +150,9 @@ def _derive_key(password: str, salt: bytes, params: KdfParams) -> bytes:
     the same password and salt.
     """
     if not isinstance(password, str) or not password:
-        raise ValueError('password must be a non-empty string')
+        raise ValueError("password must be a non-empty string")
     material = hashlib.scrypt(
-        password.encode('utf-8'),
+        password.encode("utf-8"),
         salt=salt,
         n=params.n,
         r=params.r,
@@ -164,11 +164,9 @@ def _derive_key(password: str, salt: bytes, params: KdfParams) -> bytes:
         maxmem=params.memory_required(),
     )
     # libsodium's convention: an all-zero key means the input was degenerate.
-    if material == b'\x00' * 32:
-        raise StorageError('derived key is all zero')
-    return hkdf_sha256(
-        salt=b'\x00' * 32, ikm=material, info=_KEY_INFO, length=32
-    )
+    if material == b"\x00" * 32:
+        raise StorageError("derived key is all zero")
+    return hkdf_sha256(salt=b"\x00" * 32, ikm=material, info=_KEY_INFO, length=32)
 
 
 class Container:
@@ -205,7 +203,7 @@ class Container:
         *,
         kdf_params: Optional[KdfParams] = None,
         overwrite: bool = False,
-    ) -> 'Container':
+    ) -> "Container":
         """
         Create a new container file with a fresh random salt.
 
@@ -219,15 +217,15 @@ class Container:
         """
         params = kdf_params or DEFAULT_KDF
         if os.path.exists(path) and not overwrite:
-            raise FileExistsError(f'{path} already exists')
+            raise FileExistsError(f"{path} already exists")
         salt = nacl.utils.random(16)
         key = _derive_key(password, salt, params)
         container = cls(path, key, params, salt)
-        container.store(b'', epoch=0)
+        container.store(b"", epoch=0)
         return container
 
     @classmethod
-    def open(cls, path: str, password: str) -> 'Container':
+    def open(cls, path: str, password: str) -> "Container":
         """
         Open an existing container.
 
@@ -242,9 +240,9 @@ class Container:
         version = header[len(MAGIC)]
         if version != CONTAINER_VERSION:
             raise MalformedContainer(
-                f'container version {version} != {CONTAINER_VERSION}'
+                f"container version {version} != {CONTAINER_VERSION}"
             )
-        params = KdfParams.from_header(header[len(MAGIC) + 1:len(MAGIC) + 5])
+        params = KdfParams.from_header(header[len(MAGIC) + 1 : len(MAGIC) + 5])
         salt = header[-16:]
         key = _derive_key(password, salt, params)
         return cls(path, key, params, salt)
@@ -260,23 +258,23 @@ class Container:
     @staticmethod
     def _read_file(path: str) -> bytes:
         if not os.path.exists(path):
-            raise MalformedContainer(f'{path} does not exist')
+            raise MalformedContainer(f"{path} does not exist")
         try:
-            with open(path, 'rb') as handle:
+            with open(path, "rb") as handle:
                 return handle.read()
         except OSError as exc:
-            raise StorageError(f'cannot read {path}') from exc
+            raise StorageError(f"cannot read {path}") from exc
 
     @staticmethod
     def _split(raw: bytes, path: str) -> Tuple[bytes, bytes]:
         if len(raw) < _HEADER_LEN:
             raise MalformedContainer(
-                f'{path} is {len(raw)} bytes, shorter than a header'
+                f"{path} is {len(raw)} bytes, shorter than a header"
             )
         if not raw.startswith(MAGIC):
-            raise MalformedContainer(f'{path} is not an anarchy container')
+            raise MalformedContainer(f"{path} is not an anarchy container")
         if len(raw) < _HEADER_LEN + _NONCE_LEN + _TAG_LEN:
-            raise MalformedContainer(f'{path} is truncated')
+            raise MalformedContainer(f"{path} is truncated")
         return raw[:_HEADER_LEN], raw[_HEADER_LEN:]
 
     def store(self, payload: bytes, epoch: int) -> None:
@@ -290,11 +288,11 @@ class Container:
             StorageError: the payload is too large or the write fails.
         """
         if not isinstance(payload, (bytes, bytearray)):
-            raise TypeError('payload must be bytes')
+            raise TypeError("payload must be bytes")
         if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
-            raise ValueError('epoch must be a non-negative int')
-        if epoch >= 2 ** 64:
-            raise ValueError('epoch does not fit in 64 bits')
+            raise ValueError("epoch must be a non-negative int")
+        if epoch >= 2**64:
+            raise ValueError("epoch does not fit in 64 bits")
 
         plaintext = _EPOCH_STRUCT.pack(epoch) + bytes(payload)
         nonce = nacl.utils.random(_NONCE_LEN)
@@ -303,13 +301,13 @@ class Container:
         )
         blob = self._header + nonce + ciphertext
 
-        directory = os.path.dirname(os.path.abspath(self._path)) or '.'
+        directory = os.path.dirname(os.path.abspath(self._path)) or "."
         os.makedirs(directory, exist_ok=True)
         # Write beside the target then rename, so a crash mid-write leaves the
         # previous good file rather than a half-written one.
-        temporary = os.path.join(directory, f'.{os.path.basename(self._path)}.tmp')
+        temporary = os.path.join(directory, f".{os.path.basename(self._path)}.tmp")
         try:
-            with open(temporary, 'wb') as handle:
+            with open(temporary, "wb") as handle:
                 handle.write(blob)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -320,7 +318,7 @@ class Container:
                     os.remove(temporary)
                 except OSError:
                     pass
-            raise StorageError(f'cannot write {self._path}') from exc
+            raise StorageError(f"cannot write {self._path}") from exc
 
     def load(self, minimum_epoch: Optional[int] = None) -> Tuple[int, bytes]:
         """
@@ -344,17 +342,17 @@ class Container:
             # AEAD cannot distinguish a wrong password from a modified file,
             # and must not try to.
             raise WrongPassword(
-                f'cannot decrypt {self._path}: wrong password or modified file'
+                f"cannot decrypt {self._path}: wrong password or modified file"
             ) from exc
 
         if len(plaintext) < _EPOCH_LEN:
-            raise MalformedContainer('decrypted payload is too short to hold an epoch')
+            raise MalformedContainer("decrypted payload is too short to hold an epoch")
         (epoch,) = _EPOCH_STRUCT.unpack(plaintext[:_EPOCH_LEN])
         payload = plaintext[_EPOCH_LEN:]
 
         if minimum_epoch is not None and epoch < minimum_epoch:
             raise EpochRollback(
-                f'stored epoch {epoch} is older than the required {minimum_epoch}'
+                f"stored epoch {epoch} is older than the required {minimum_epoch}"
             )
         return epoch, payload
 
@@ -365,4 +363,4 @@ class Container:
         except FileNotFoundError:
             pass
         except OSError as exc:
-            raise StorageError(f'cannot delete {self._path}') from exc
+            raise StorageError(f"cannot delete {self._path}") from exc

@@ -57,9 +57,13 @@ AT_FLOOR = DEFAULT_PROFILE.floor
 ACROSS = 65536
 
 
-def build_frame(header: dict, ciphertext: bytes, fill: bytes = b'',
-                declared_length: int = None,
-                fill_length: int = None) -> bytes:
+def build_frame(
+    header: dict,
+    ciphertext: bytes,
+    fill: bytes = b"",
+    declared_length: int = None,
+    fill_length: int = None,
+) -> bytes:
     """
     Assemble a ratchet frame from its parts.
 
@@ -71,27 +75,31 @@ def build_frame(header: dict, ciphertext: bytes, fill: bytes = b'',
     if fill_length is not None:
         fill = os.urandom(fill_length)
     payload = (
-        bytes.fromhex(header['dh'])
-        + encode_varint(header['pn'])
-        + encode_varint(header['n'])
+        bytes.fromhex(header["dh"])
+        + encode_varint(header["pn"])
+        + encode_varint(header["n"])
         + encode_varint(declared)
         + ciphertext
         + fill
     )
-    return bytes((WIRE_VERSION, KIND_RATCHET_MESSAGE)) + \
-        encode_varint(len(payload)) + payload
+    return (
+        bytes((WIRE_VERSION, KIND_RATCHET_MESSAGE))
+        + encode_varint(len(payload))
+        + payload
+    )
 
 
 def send(sender, receiver, size: int, profile=None) -> int:
     """Send a message of ``size`` bytes and return the frame length."""
-    frame = sender.send(b'x' * size, profile)
-    assert receiver.receive(frame, profile) == b'x' * size
+    frame = sender.send(b"x" * size, profile)
+    assert receiver.receive(frame, profile) == b"x" * size
     return len(frame)
 
 
 # ---------------------------------------------------------------------------
 # The measurement
 # ---------------------------------------------------------------------------
+
 
 def test_a_one_byte_message_and_a_5000_byte_message_are_the_same_size():
     """
@@ -103,8 +111,8 @@ def test_a_one_byte_message_and_a_5000_byte_message_are_the_same_size():
     a transport records and what an observer counts.
     """
     pair = handshake()
-    small = send(pair['initiator'], pair['responder'], SMALL)
-    large = send(pair['initiator'], pair['responder'], MEDIUM)
+    small = send(pair["initiator"], pair["responder"], SMALL)
+    large = send(pair["initiator"], pair["responder"], MEDIUM)
     assert small == large
 
 
@@ -119,8 +127,8 @@ def test_a_message_that_crosses_a_bucket_grows_the_frame():
     a trade anyone should accept silently.
     """
     pair = handshake()
-    under = send(pair['initiator'], pair['responder'], MEDIUM)
-    over = send(pair['initiator'], pair['responder'], ACROSS)
+    under = send(pair["initiator"], pair["responder"], MEDIUM)
+    over = send(pair["initiator"], pair["responder"], ACROSS)
     assert over > under
     # The difference is a whole number of steps, up to the one byte the payload
     # length varint itself gains when the frame passes 16 KiB. That byte is not
@@ -132,7 +140,7 @@ def test_a_message_that_crosses_a_bucket_grows_the_frame():
 def test_every_size_below_the_floor_produces_one_length():
     pair = handshake()
     lengths = {
-        send(pair['initiator'], pair['responder'], size)
+        send(pair["initiator"], pair["responder"], size)
         for size in (0, 1, 2, 100, 1000, 5000, 8000)
     }
     assert len(lengths) == 1
@@ -149,9 +157,10 @@ def test_the_floor_is_a_bound_on_the_padded_size_not_the_message():
     a special case at the boundary, is the kind of thing that differs between
     two implementations.
     """
-    assert len(pad(b'x' * (DEFAULT_PROFILE.floor - 1))) == \
-        DEFAULT_PROFILE.bucket(DEFAULT_PROFILE.floor + 1)
-    assert len(pad(b'x' * (DEFAULT_PROFILE.floor - 2))) == DEFAULT_PROFILE.floor
+    assert len(pad(b"x" * (DEFAULT_PROFILE.floor - 1))) == DEFAULT_PROFILE.bucket(
+        DEFAULT_PROFILE.floor + 1
+    )
+    assert len(pad(b"x" * (DEFAULT_PROFILE.floor - 2))) == DEFAULT_PROFILE.floor
 
 
 def test_the_frame_length_does_not_wobble_as_counters_grow():
@@ -166,11 +175,11 @@ def test_the_frame_length_does_not_wobble_as_counters_grow():
     to hand to someone measuring you.
     """
     pair = handshake()
-    initiator, responder = pair['initiator'], pair['responder']
+    initiator, responder = pair["initiator"], pair["responder"]
     lengths = set()
     for _ in range(200):
-        frame = initiator.send(b'x' * 10)
-        assert responder.receive(frame) == b'x' * 10
+        frame = initiator.send(b"x" * 10)
+        assert responder.receive(frame) == b"x" * 10
         lengths.add(len(frame))
     # 200 messages crosses the 128 boundary where the n varint widens.
     assert len(lengths) == 1
@@ -186,10 +195,10 @@ def test_padding_is_actually_reachable_through_a_transport():
     """
     pair = handshake()
     relay = Relay()
-    sender, receiver = relay.link('sender', 'receiver')
+    sender, receiver = relay.link("sender", "receiver")
     for size in (SMALL, MEDIUM, 1000):
-        sender.send(pair['initiator'].send(b'x' * size))
-    assert len(set(relay.observed_lengths('sender'))) == 1
+        sender.send(pair["initiator"].send(b"x" * size))
+    assert len(set(relay.observed_lengths("sender"))) == 1
 
 
 def test_a_disabled_profile_restores_the_original_sizes():
@@ -204,11 +213,11 @@ def test_a_disabled_profile_restores_the_original_sizes():
     one this version can read, which is the next test's subject.
     """
     relay = Relay()
-    sender, _ = relay.link('sender', 'receiver')
+    sender, _ = relay.link("sender", "receiver")
     pair = handshake()
     for size in (SMALL, MEDIUM):
-        sender.send(pair['initiator'].send(b'x' * size, UNPADDED))
-    small, large = relay.observed_lengths('sender')
+        sender.send(pair["initiator"].send(b"x" * size, UNPADDED))
+    small, large = relay.observed_lengths("sender")
     # The frame grows by the plaintext difference, up to the widths of the two
     # varints that grew with it.
     assert abs((large - small) - (MEDIUM - SMALL)) <= 2
@@ -219,21 +228,22 @@ def test_a_disabled_profile_restores_the_original_sizes():
 # The plaintext layer
 # ---------------------------------------------------------------------------
 
+
 def test_pad_and_unpad_round_trip():
     for size in (0, 1, 127, 128, 5000, 8191, 8192, 8193, 20000):
-        message = bytes(range(256)) * (size // 256) + b'\x00' * (size % 256)
+        message = bytes(range(256)) * (size // 256) + b"\x00" * (size % 256)
         message = message[:size]
         assert unpad(pad(message)) == message
 
 
 def test_padding_lands_on_the_bucket():
-    assert len(pad(b'x')) == DEFAULT_PROFILE.bucket(2)
-    assert len(pad(b'x' * 5000)) == DEFAULT_PROFILE.bucket(5003)
-    assert len(pad(b'')) == DEFAULT_PROFILE.bucket(1)
+    assert len(pad(b"x")) == DEFAULT_PROFILE.bucket(2)
+    assert len(pad(b"x" * 5000)) == DEFAULT_PROFILE.bucket(5003)
+    assert len(pad(b"")) == DEFAULT_PROFILE.bucket(1)
 
 
 def test_a_disabled_profile_does_not_pad():
-    assert pad(b'x' * 100, UNPADDED) == b'x' * 100
+    assert pad(b"x" * 100, UNPADDED) == b"x" * 100
     assert UNPADDED.bucket(100) == 100
     assert UNPADDED.frame_payload_length(100) == 100
 
@@ -253,9 +263,9 @@ def test_frames_from_a_disabled_profile_are_not_read_by_a_v2_receiver():
     for tests, and is not a mode a receiver can be in.
     """
     pair = handshake()
-    frame = pair['initiator'].send(b'x' * 100, UNPADDED)
+    frame = pair["initiator"].send(b"x" * 100, UNPADDED)
     with pytest.raises(PaddingError):
-        pair['responder'].receive(frame)
+        pair["responder"].receive(frame)
 
 
 def test_the_filler_is_not_all_zeros():
@@ -263,29 +273,29 @@ def test_the_filler_is_not_all_zeros():
     Zeros would make the padding distinguishable from message data that happens
     to contain zeros: a smaller leak than the length, and a free one to give up.
     """
-    padded = pad(b'x')
+    padded = pad(b"x")
     body = padded[2:]
     assert len(body) > 8
     assert not all(byte == 0 for byte in body)
     # And it is not a constant either: two paddings of the same message differ.
-    assert pad(b'x') != pad(b'x')
+    assert pad(b"x") != pad(b"x")
 
 
 def test_the_length_prefix_is_what_makes_it_unambiguous():
-    padded = pad(b'hello world')
+    padded = pad(b"hello world")
     assert padded[0] == 11
-    assert padded[1:12] == b'hello world'
+    assert padded[1:12] == b"hello world"
 
 
 def test_unpad_rejects_a_message_with_no_prefix():
     with pytest.raises(PaddingError):
-        unpad(b'')
+        unpad(b"")
 
 
 def test_unpad_rejects_a_length_that_does_not_fit():
     # Declares 200 bytes of message inside a 12-byte input.
     with pytest.raises(PaddingError):
-        unpad(b'\xc8' + b'x' * 11)
+        unpad(b"\xc8" + b"x" * 11)
 
 
 def test_unpad_rejects_a_non_canonical_length_prefix():
@@ -295,29 +305,30 @@ def test_unpad_rejects_a_non_canonical_length_prefix():
     makes a signature over an encoding worth anything.
     """
     with pytest.raises(PaddingError):
-        unpad(b'\x80\x00' + b'x' * 10)
+        unpad(b"\x80\x00" + b"x" * 10)
 
 
 def test_unpad_rejects_a_prefix_that_runs_off_the_end():
     with pytest.raises(PaddingError):
-        unpad(b'\xff')
+        unpad(b"\xff")
 
 
 def test_unpad_rejects_a_prefix_longer_than_64_bits():
     with pytest.raises(PaddingError):
-        unpad(b'\x80' * 12 + b'x' * 10)
+        unpad(b"\x80" * 12 + b"x" * 10)
 
 
 def test_padding_rejects_non_bytes():
     with pytest.raises(PaddingError):
-        pad('a string')
+        pad("a string")
     with pytest.raises(PaddingError):
-        unpad('a string')
+        unpad("a string")
 
 
 # ---------------------------------------------------------------------------
 # The profile
 # ---------------------------------------------------------------------------
+
 
 def test_the_bucket_is_monotonic():
     """
@@ -334,8 +345,7 @@ def test_the_bucket_is_monotonic():
 
 
 def test_the_bucket_is_a_function_of_length_alone():
-    assert (DEFAULT_PROFILE.bucket(1)
-            == DEFAULT_PROFILE.bucket(1)) is True
+    assert (DEFAULT_PROFILE.bucket(1) == DEFAULT_PROFILE.bucket(1)) is True
     assert DEFAULT_PROFILE.bucket(1) == DEFAULT_PROFILE.bucket(5000)
     assert DEFAULT_PROFILE.bucket(8193) != DEFAULT_PROFILE.bucket(8192)
 
@@ -362,8 +372,7 @@ def test_a_profile_that_cannot_fit_is_refused():
 
 
 def test_a_profile_rejects_nonsense():
-    for kwargs in ({'floor': -1}, {'step': 0}, {'floor': 'big'},
-                   {'step': True}):
+    for kwargs in ({"floor": -1}, {"step": 0}, {"floor": "big"}, {"step": True}):
         with pytest.raises(PaddingError):
             PaddingProfile(**kwargs)
 
@@ -371,14 +380,14 @@ def test_a_profile_rejects_nonsense():
 def test_a_message_too_large_to_pad_is_refused_with_a_reason():
     reason = fits(MAX_FRAME_BYTES)
     assert reason is not None
-    assert 'does not fit' in reason
+    assert "does not fit" in reason
     assert fits(1000) is None
 
 
 def test_sending_an_unsendable_message_raises_rather_than_truncating():
     pair = handshake()
     with pytest.raises(PaddingError):
-        pair['initiator'].send(b'x' * MAX_FRAME_BYTES)
+        pair["initiator"].send(b"x" * MAX_FRAME_BYTES)
 
 
 def test_the_frame_overhead_leaves_room_inside_a_frame():
@@ -399,15 +408,15 @@ def test_the_frame_overhead_leaves_room_inside_a_frame():
 def test_the_smallest_padded_frame_fits_in_a_frame():
     profile = PaddingProfile(floor=64, step=64)
     frame = encode_ratchet_message(
-        b'\x00' * (64 + 40), {'dh': '11' * 32, 'pn': 0, 'n': 0}, profile
+        b"\x00" * (64 + 40), {"dh": "11" * 32, "pn": 0, "n": 0}, profile
     )
     assert len(frame) <= MAX_FRAME_BYTES
     assert decode_ratchet_message(frame).n == 0
 
 
 def test_a_profile_describes_itself():
-    assert 'floor 8192' in DEFAULT_PROFILE.describe()
-    assert UNPADDED.describe() == 'disabled'
+    assert "floor 8192" in DEFAULT_PROFILE.describe()
+    assert UNPADDED.describe() == "disabled"
     assert UNPADDED.enabled is False
     assert DEFAULT_PROFILE.enabled is True
 
@@ -416,12 +425,11 @@ def test_a_profile_describes_itself():
 # The frame layer
 # ---------------------------------------------------------------------------
 
+
 def test_the_ct_length_prefix_round_trips():
     for size in (40, 100, 8192, 20000):
-        ciphertext = b'\x5a' * size
-        frame = encode_ratchet_message(
-            ciphertext, {'dh': '11' * 32, 'pn': 0, 'n': 0}
-        )
+        ciphertext = b"\x5a" * size
+        frame = encode_ratchet_message(ciphertext, {"dh": "11" * 32, "pn": 0, "n": 0})
         assert decode_ratchet_message(frame).ciphertext == ciphertext
 
 
@@ -432,12 +440,15 @@ def test_trailing_fill_is_ignored_by_the_decoder():
     error, and enforcing a bucket would turn a padding policy into a hard
     protocol break.
     """
-    ciphertext = b'\x5a' * 100
-    header = {'dh': '11' * 32, 'pn': 0, 'n': 0}
-    for fill in (b'', os.urandom(10), os.urandom(5000)):
-        assert decode_ratchet_message(
-            build_frame(header, ciphertext, fill=fill)
-        ).ciphertext == ciphertext
+    ciphertext = b"\x5a" * 100
+    header = {"dh": "11" * 32, "pn": 0, "n": 0}
+    for fill in (b"", os.urandom(10), os.urandom(5000)):
+        assert (
+            decode_ratchet_message(
+                build_frame(header, ciphertext, fill=fill)
+            ).ciphertext
+            == ciphertext
+        )
 
 
 def test_a_lying_ciphertext_length_fails_at_the_aead_not_silently():
@@ -452,11 +463,11 @@ def test_a_lying_ciphertext_length_fails_at_the_aead_not_silently():
     something else.
     """
     pair = handshake()
-    frame = pair['initiator'].send(b'the original message')
+    frame = pair["initiator"].send(b"the original message")
     message = decode_ratchet_message(frame)
     original = message.ciphertext
     header = message.to_header()
-    receiver = pair['responder']
+    receiver = pair["responder"]
 
     # Shorter: the receiver takes fewer bytes, so the tag is no longer the last
     # 16 of what it decrypts, and the rest of the frame becomes fill.
@@ -467,10 +478,13 @@ def test_a_lying_ciphertext_length_fails_at_the_aead_not_silently():
     # Longer: the attacker appends bytes and declares them, so the tag is
     # followed by something the AEAD never produced.
     with pytest.raises(DecryptionError):
-        receiver.receive(build_frame(
-            header, original + os.urandom(16),
-            declared_length=len(original) + 16,
-        ))
+        receiver.receive(
+            build_frame(
+                header,
+                original + os.urandom(16),
+                declared_length=len(original) + 16,
+            )
+        )
 
 
 def test_a_ciphertext_length_past_the_end_is_caught_by_the_decoder():
@@ -479,23 +493,27 @@ def test_a_ciphertext_length_past_the_end_is_caught_by_the_decoder():
     not a failed decryption, and the two get different errors on purpose.
     """
     with pytest.raises(WireError):
-        decode_ratchet_message(build_frame(
-            {'dh': '11' * 32, 'pn': 0, 'n': 0},
-            b'\x5a' * 100,
-            declared_length=100000,
-        ))
+        decode_ratchet_message(
+            build_frame(
+                {"dh": "11" * 32, "pn": 0, "n": 0},
+                b"\x5a" * 100,
+                declared_length=100000,
+            )
+        )
 
 
 def test_a_ciphertext_too_short_to_be_a_message_is_refused():
     # The frame is long enough that only the declared length is wrong, so the
     # decoder reaches the check instead of stopping on the frame minimum.
     with pytest.raises(InvalidField):
-        decode_ratchet_message(build_frame(
-            {'dh': '11' * 32, 'pn': 0, 'n': 0},
-            b'\x5a' * 10,
-            declared_length=10,
-            fill_length=200,
-        ))
+        decode_ratchet_message(
+            build_frame(
+                {"dh": "11" * 32, "pn": 0, "n": 0},
+                b"\x5a" * 10,
+                declared_length=10,
+                fill_length=200,
+            )
+        )
 
 
 def test_a_frame_padded_by_one_profile_decodes_under_another():
@@ -507,17 +525,18 @@ def test_a_frame_padded_by_one_profile_decodes_under_another():
     """
     pair = handshake()
     coarse = PaddingProfile(floor=1024, step=1024)
-    frame = pair['initiator'].send(b'hello', coarse)
-    assert pair['responder'].receive(frame) == b'hello'
+    frame = pair["initiator"].send(b"hello", coarse)
+    assert pair["responder"].receive(frame) == b"hello"
     # And the receiver unpads by the prefix, not by its own ladder.
-    assert pair['responder'].receive(
-        pair['initiator'].send(b'hello again', coarse)
-    ) == b'hello again'
+    assert (
+        pair["responder"].receive(pair["initiator"].send(b"hello again", coarse))
+        == b"hello again"
+    )
 
 
 def test_a_padded_frame_is_still_a_ratchet_frame():
     frame = pair = handshake()
-    frame = pair['initiator'].send(b'x')
+    frame = pair["initiator"].send(b"x")
     assert frame[1] == KIND_RATCHET_MESSAGE
 
 

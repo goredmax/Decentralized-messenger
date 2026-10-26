@@ -13,6 +13,6 @@ it was an empty file. Naming a capability that does not exist is how
 ``sqlcipher-legacy`` for months, none of which anything imported.
 """
 
-__all__ = ['relay']
+__all__ = ["relay"]
 
 __version__ = "0.1.0"

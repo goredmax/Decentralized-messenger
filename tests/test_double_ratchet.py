@@ -6,10 +6,15 @@ Tests cover basic functionality, security properties, and edge cases.
 import pytest
 import nacl.public as public
 from src.crypto.double_ratchet import (
-    DoubleRatchet, SessionState,
-    TooManySkippedMessagesError, DuplicateMessageError,
-    InvalidSessionStateError, DecryptionError,
-    IncompatibleSessionError, MAX_SKIP, PROTOCOL_VERSION
+    DoubleRatchet,
+    SessionState,
+    TooManySkippedMessagesError,
+    DuplicateMessageError,
+    InvalidSessionStateError,
+    DecryptionError,
+    IncompatibleSessionError,
+    MAX_SKIP,
+    PROTOCOL_VERSION,
 )
 
 
@@ -17,24 +22,21 @@ def create_session_pair():
     """Create Alice and Bob with initial X3DH-derived root key."""
     alice_dh = public.PrivateKey.generate()
     bob_dh = public.PrivateKey.generate()
-    
+
     shared_secret = public.Box(alice_dh, bob_dh.public_key)._shared_key
     root_key = shared_secret
-    
+
     alice = DoubleRatchet(
         dh_private=alice_dh,
         remote_dh_public=bytes(bob_dh.public_key),
         root_key=root_key,
-        is_initiator=True
+        is_initiator=True,
     )
-    
+
     bob = DoubleRatchet(
-        dh_private=bob_dh,
-        remote_dh_public=None,
-        root_key=root_key,
-        is_initiator=False
+        dh_private=bob_dh, remote_dh_public=None, root_key=root_key, is_initiator=False
     )
-    
+
     return alice, bob
 
 
@@ -45,22 +47,22 @@ class TestBasicEncryption:
         encrypted, header = alice.encrypt(plaintext)
         decrypted = bob.decrypt(encrypted, header)
         assert decrypted == plaintext
-    
+
     def test_bob_replies(self):
         alice, bob = create_session_pair()
-        
+
         msg1 = b"Hello Bob!"
         enc1, hdr1 = alice.encrypt(msg1)
         bob.decrypt(enc1, hdr1)
-        
+
         msg2 = b"Hi Alice!"
         enc2, hdr2 = bob.encrypt(msg2)
         decrypted = alice.decrypt(enc2, hdr2)
         assert decrypted == msg2
-    
+
     def test_multiple_messages_same_chain(self):
         alice, bob = create_session_pair()
-        
+
         for i in range(10):
             msg = f"Message {i}".encode()
             enc, hdr = alice.encrypt(msg)
@@ -71,79 +73,79 @@ class TestBasicEncryption:
 class TestOutOfOrderDelivery:
     def test_receive_out_of_order(self):
         alice, bob = create_session_pair()
-        
+
         messages = [b"First", b"Second", b"Third"]
         encrypted_msgs = []
         for msg in messages:
             enc, hdr = alice.encrypt(msg)
             encrypted_msgs.append((enc, hdr))
-        
+
         for idx in [2, 0, 1]:
             enc, hdr = encrypted_msgs[idx]
             dec = bob.decrypt(enc, hdr)
             assert dec == messages[idx]
-    
+
     def test_skip_message_keys_stored(self):
         alice, bob = create_session_pair()
-        
+
         enc_msgs = []
         for i in range(5):
             enc, hdr = alice.encrypt(f"Msg {i}".encode())
             enc_msgs.append((enc, hdr))
-        
+
         dec = bob.decrypt(*enc_msgs[4])
         assert dec == b"Msg 4"
         assert len(bob.state.skipped_keys) == 4
-        
+
         for i in range(4):
             dec = bob.decrypt(*enc_msgs[i])
             assert dec == f"Msg {i}".encode()
-        
+
         assert len(bob.state.skipped_keys) == 0
 
 
 class TestDHRatchet:
     def test_dh_ratchet_on_reply(self):
         alice, bob = create_session_pair()
-        
+
         alice_dh_before = alice.state.dh_local_pub
         bob_dh_before = bob.state.dh_local_pub
-        
+
         enc1, hdr1 = alice.encrypt(b"Hello")
         bob.decrypt(enc1, hdr1)
-        
+
         enc2, hdr2 = bob.encrypt(b"Hi")
         assert bob.state.dh_local_pub != bob_dh_before
-        
+
         alice.decrypt(enc2, hdr2)
         assert alice.state.dh_local_pub != alice_dh_before
-    
+
     def test_dh_ratchet_updates_remote_key(self):
         alice, bob = create_session_pair()
-        
+
         enc1, hdr1 = alice.encrypt(b"Hello")
         bob.decrypt(enc1, hdr1)
-        
+
         assert bob.state.dh_remote_pub == alice.state.dh_local_pub
-        
+
         enc2, hdr2 = bob.encrypt(b"Hi")
         alice.decrypt(enc2, hdr2)
-        
+
         assert alice.state.dh_remote_pub == bob.state.dh_local_pub
 
 
 class TestPostCompromiseSecurity:
     """
-    Post-Compromise Security: After a DH ratchet, an attacker with 
+    Post-Compromise Security: After a DH ratchet, an attacker with
     old state cannot decrypt new messages.
-    
-    The honest test: 
+
+    The honest test:
     1. Attacker gets full state snapshot (RK, CKs, CKr, DHs_priv, DHr_pub, skipped_keys)
     2. Legitimate parties perform DH ratchet (both generate new ephemeral keys)
     3. Attacker tries to derive message keys from old state
     4. Attacker's derived keys differ from actual keys used after healing
     """
-    
+
     def test_pcs_after_dh_ratchet(self):
         """
         A snapshot taken before healing must not decrypt anything sent after.
@@ -189,24 +191,24 @@ class TestPostCompromiseSecurity:
         alice, bob = create_session_pair()
         for index in range(4):
             encrypted, header = alice.encrypt(f"Msg {index}".encode())
-        bob.decrypt(encrypted, header)      # leaves three skipped keys
+        bob.decrypt(encrypted, header)  # leaves three skipped keys
         assert len(bob.state.skipped_keys) == 3
 
         exfiltrated = bob.state.serialize()
-        assert 'skipped_keys' not in exfiltrated
+        assert "skipped_keys" not in exfiltrated
 
 
 class TestForwardSecrecy:
     def test_old_messages_safe(self):
         alice, bob = create_session_pair()
-        
+
         messages = []
         for i in range(5):
             msg = f"Old message {i}".encode()
             enc, hdr = alice.encrypt(msg)
             messages.append((msg, enc, hdr))
             bob.decrypt(enc, hdr)
-        
+
         for i in range(5):
             msg = f"New message {i}".encode()
             enc, hdr = alice.encrypt(msg)
@@ -216,27 +218,28 @@ class TestForwardSecrecy:
 class TestDoSProtection:
     def test_max_skip_limit(self):
         alice, bob = create_session_pair()
-        
+
         # Send first message to establish session
         enc, hdr = alice.encrypt(b"Hello")
         bob.decrypt(enc, hdr)
-        
+
         # Craft fake header with huge message number
         fake_header = {
-            'dh': alice.state.dh_local_pub.hex(),
-            'pn': 0,
-            'n': MAX_SKIP + 100
+            "dh": alice.state.dh_local_pub.hex(),
+            "pn": 0,
+            "n": MAX_SKIP + 100,
         }
-        
+
         import nacl.bindings
         import nacl.utils
+
         fake_mk = nacl.utils.random(32)
         nonce = nacl.utils.random(24)
         fake_ct = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
             b"fake", b"", nonce, fake_mk
         )
         fake_encrypted = nonce + fake_ct
-        
+
         with pytest.raises(TooManySkippedMessagesError):
             bob.decrypt(fake_encrypted, fake_header)
 
@@ -244,11 +247,11 @@ class TestDoSProtection:
 class TestDuplicateDetection:
     def test_duplicate_rejected(self):
         alice, bob = create_session_pair()
-        
+
         enc, hdr = alice.encrypt(b"Hello")
         dec1 = bob.decrypt(enc, hdr)
         assert dec1 == b"Hello"
-        
+
         with pytest.raises(DuplicateMessageError):
             bob.decrypt(enc, hdr)
 
@@ -256,23 +259,23 @@ class TestDuplicateDetection:
 class TestAEADIntegrity:
     def test_tampered_ciphertext_fails(self):
         alice, bob = create_session_pair()
-        
+
         enc, hdr = alice.encrypt(b"Secret message")
-        
+
         tampered = bytearray(enc)
         tampered[30] ^= 0xFF
-        
+
         with pytest.raises(DecryptionError):
             bob.decrypt(bytes(tampered), hdr)
-    
+
     def test_wrong_nonce_fails(self):
         alice, bob = create_session_pair()
-        
+
         enc, hdr = alice.encrypt(b"Secret message")
-        
+
         bad_enc = bytearray(enc)
         bad_enc[0] ^= 0xFF
-        
+
         with pytest.raises(DecryptionError):
             bob.decrypt(bytes(bad_enc), hdr)
 
@@ -280,31 +283,33 @@ class TestAEADIntegrity:
 class TestSessionSerialization:
     def test_serialize_deserialize_roundtrip(self):
         alice, bob = create_session_pair()
-        
+
         for i in range(3):
             enc, hdr = alice.encrypt(f"Msg {i}".encode())
             bob.decrypt(enc, hdr)
-        
+
         serialized = alice.state.serialize()
         restored = SessionState.deserialize(serialized)
-        
+
         assert restored.dh_local_priv == alice.state.dh_local_priv
         assert restored.dh_local_pub == alice.state.dh_local_pub
         assert restored.root_key == alice.state.root_key
         assert restored.send_msg_count == alice.state.send_msg_count
         assert restored.recv_msg_count == alice.state.recv_msg_count
+
     def test_serialized_state_is_json_safe(self):
         """
         Skipped keys used to be a dict with tuple keys, which json cannot encode.
         """
         import json
+
         alice, bob = create_session_pair()
         for i in range(4):
             enc, hdr = alice.encrypt(f"Msg {i}".encode())
         bob.decrypt(enc, hdr)
 
         dumped = json.dumps(bob.state.serialize(include_message_keys=True))
-        assert json.loads(dumped)['skipped_keys']
+        assert json.loads(dumped)["skipped_keys"]
 
     def test_skipped_keys_roundtrip_when_requested(self):
         alice, bob = create_session_pair()
@@ -324,11 +329,11 @@ class TestSessionSerialization:
         Loading it would silently derive the wrong keys, so it is refused.
         """
         with pytest.raises(IncompatibleSessionError):
-            SessionState.deserialize({'root_key': '00' * 32})
+            SessionState.deserialize({"root_key": "00" * 32})
 
     def test_foreign_version_is_rejected(self):
         payload = create_session_pair()[0].state.serialize()
-        payload['version'] = PROTOCOL_VERSION + 1
+        payload["version"] = PROTOCOL_VERSION + 1
         with pytest.raises(IncompatibleSessionError):
             SessionState.deserialize(payload)
 
@@ -344,22 +349,19 @@ class TestKdfOrder:
     def test_next_chain_key_uses_0x01_and_message_key_0x02(self):
         import hashlib as _hashlib
         import hmac as _hmac
+
         ratchet = create_session_pair()[0]
-        chain_key = b'\x02' * 32
+        chain_key = b"\x02" * 32
         next_chain_key, message_key = ratchet._kdf_ck(chain_key)
-        assert next_chain_key == _hmac.new(
-            chain_key, b'\x01', _hashlib.sha256
-        ).digest()
-        assert message_key == _hmac.new(
-            chain_key, b'\x02', _hashlib.sha256
-        ).digest()
+        assert next_chain_key == _hmac.new(chain_key, b"\x01", _hashlib.sha256).digest()
+        assert message_key == _hmac.new(chain_key, b"\x02", _hashlib.sha256).digest()
 
     def test_chain_actually_advances_to_the_next_value(self):
         """The stored sending chain must be the "next" value, not the message key."""
         ratchet = create_session_pair()[0]
         assert ratchet.state.send_chain_key is not None
         before = ratchet.state.send_chain_key
-        ratchet.encrypt(b'x')
+        ratchet.encrypt(b"x")
         after = ratchet.state.send_chain_key
         assert after != before
         next_chain_key, _ = ratchet._kdf_ck(before)
@@ -375,17 +377,17 @@ class TestKdfOrder:
         deriving the same message keys from ``HMAC(b"", ...)``.
         """
         ratchet = create_session_pair()[0]
-        new_root, new_chain = ratchet._kdf_rk(b'\x01' * 32, b'\x02' * 32)
+        new_root, new_chain = ratchet._kdf_rk(b"\x01" * 32, b"\x02" * 32)
         assert len(new_root) == 32
         assert len(new_chain) == 32
-        assert new_chain != b''
+        assert new_chain != b""
 
     def test_chain_keys_are_never_empty_after_a_ratchet(self):
         alice, bob = create_session_pair()
         assert len(alice.state.send_chain_key) == 32
 
-        first, first_hdr = alice.encrypt(b'hello')
-        assert bob.decrypt(first, first_hdr) == b'hello'
+        first, first_hdr = alice.encrypt(b"hello")
+        assert bob.decrypt(first, first_hdr) == b"hello"
 
         # Bob ratcheted on receive, so both of his chains must be full length.
         assert len(bob.state.recv_chain_key) == 32
@@ -448,9 +450,9 @@ class TestStateRollback:
         # implementation ratcheted the root key with it before any AEAD check.
         nonce = nacl.utils.random(24)
         fake_ct = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
-            b'forged', b'', nonce, nacl.utils.random(32)
+            b"forged", b"", nonce, nacl.utils.random(32)
         )
-        forged_header = {'dh': nacl.utils.random(32).hex(), 'pn': 0, 'n': 0}
+        forged_header = {"dh": nacl.utils.random(32).hex(), "pn": 0, "n": 0}
         with pytest.raises(DecryptionError):
             bob.decrypt(nonce + fake_ct, forged_header)
 
@@ -483,7 +485,7 @@ class TestHeaderValidation:
 
     def test_missing_field_rejected(self):
         bob, enc, hdr = self._session()
-        for field in ('dh', 'pn', 'n'):
+        for field in ("dh", "pn", "n"):
             broken = dict(hdr)
             broken.pop(field)
             with pytest.raises(InvalidSessionStateError):
@@ -492,7 +494,7 @@ class TestHeaderValidation:
     def test_bad_dh_length_rejected(self):
         bob, enc, hdr = self._session()
         with pytest.raises(InvalidSessionStateError):
-            bob.decrypt(enc, dict(hdr, dh='abcd'))
+            bob.decrypt(enc, dict(hdr, dh="abcd"))
 
     def test_negative_message_number_rejected(self):
         bob, enc, hdr = self._session()
@@ -502,7 +504,7 @@ class TestHeaderValidation:
     def test_non_integer_message_number_rejected(self):
         bob, enc, hdr = self._session()
         with pytest.raises(InvalidSessionStateError):
-            bob.decrypt(enc, dict(hdr, n='0'))
+            bob.decrypt(enc, dict(hdr, n="0"))
 
     def test_boolean_is_not_an_integer(self):
         bob, enc, hdr = self._session()
@@ -512,12 +514,12 @@ class TestHeaderValidation:
     def test_oversized_message_number_rejected(self):
         bob, enc, hdr = self._session()
         with pytest.raises(InvalidSessionStateError):
-            bob.decrypt(enc, dict(hdr, n=2 ** 32))
+            bob.decrypt(enc, dict(hdr, n=2**32))
 
     def test_short_ciphertext_rejected(self):
         bob, _, hdr = self._session()
         with pytest.raises(DecryptionError):
-            bob.decrypt(b'\x00' * 8, hdr)
+            bob.decrypt(b"\x00" * 8, hdr)
 
 
 class TestSkippedKeyBounds:
@@ -548,11 +550,11 @@ class TestSkippedKeyBounds:
 
         nonce = nacl.utils.random(24)
         fake = nacl.bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
-            b'x', b'', nonce, nacl.utils.random(32)
+            b"x", b"", nonce, nacl.utils.random(32)
         )
         # One past the per-chain budget: refused, and nothing is retained.
         with pytest.raises(TooManySkippedMessagesError):
-            bob.decrypt(nonce + fake, {'dh': hdr['dh'], 'pn': 0, 'n': MAX_SKIP + 2})
+            bob.decrypt(nonce + fake, {"dh": hdr["dh"], "pn": 0, "n": MAX_SKIP + 2})
         assert len(bob.state.skipped_keys) == 0
 
 

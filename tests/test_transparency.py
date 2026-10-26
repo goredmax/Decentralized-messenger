@@ -39,7 +39,7 @@ from src.protocol.transparency import (
     TransparencyLog,
 )
 
-GROUP = 'a-group'
+GROUP = "a-group"
 
 
 def member():
@@ -66,12 +66,17 @@ def populated(*pairs):
 # Entries
 # ---------------------------------------------------------------------------
 
+
 def test_an_entry_verifies_and_hashes():
     identity = member()
     state = first_chain(identity)
     entry = LogEntry(
-        index=0, key_id=state.key_id, chain_id=state.chain_id, iteration=0,
-        previous=GENESIS, signature=b'\x00' * 64,
+        index=0,
+        key_id=state.key_id,
+        chain_id=state.chain_id,
+        iteration=0,
+        previous=GENESIS,
+        signature=b"\x00" * 64,
     ).sign(identity)
     entry.verify()
     assert len(entry.hash()) == 32
@@ -82,8 +87,12 @@ def test_an_entry_cannot_be_signed_by_anyone_but_its_sender():
     identity, other = member(), member()
     state = first_chain(identity)
     entry = LogEntry(
-        index=0, key_id=state.key_id, chain_id=state.chain_id, iteration=0,
-        previous=GENESIS, signature=b'\x00' * 64,
+        index=0,
+        key_id=state.key_id,
+        chain_id=state.chain_id,
+        iteration=0,
+        previous=GENESIS,
+        signature=b"\x00" * 64,
     )
     with pytest.raises(LogFormatError):
         entry.sign(other)
@@ -93,7 +102,10 @@ def test_a_forged_signature_is_caught():
     identity, other = member(), member()
     state = first_chain(identity)
     forged = LogEntry(
-        index=0, key_id=state.key_id, chain_id=state.chain_id, iteration=0,
+        index=0,
+        key_id=state.key_id,
+        chain_id=state.chain_id,
+        iteration=0,
         previous=GENESIS,
         signature=other.sign(state.chain_id).signature,
     )
@@ -114,27 +126,29 @@ def test_changing_any_field_breaks_the_signature():
     identity = member()
     state = first_chain(identity)
     entry = LogEntry(
-        index=3, key_id=state.key_id, chain_id=state.chain_id, iteration=7,
-        previous=b'\x11' * 32, signature=b'\x00' * 64,
+        index=3,
+        key_id=state.key_id,
+        chain_id=state.chain_id,
+        iteration=7,
+        previous=b"\x11" * 32,
+        signature=b"\x00" * 64,
     ).sign(identity)
     entry.verify()
 
     for field, value in (
-        ('index', 4),
-        ('chain_id', b'\x22' * 32),
-        ('iteration', 8),
-        ('previous', b'\x33' * 32),
+        ("index", 4),
+        ("chain_id", b"\x22" * 32),
+        ("iteration", 8),
+        ("previous", b"\x33" * 32),
     ):
         with pytest.raises(LogSignatureError):
             replace(entry, **{field: value}).verify()
 
-    other_group = replace(entry, key_id=SenderKeyId(GROUP + '!', state.key_id.sender))
+    other_group = replace(entry, key_id=SenderKeyId(GROUP + "!", state.key_id.sender))
     with pytest.raises(LogSignatureError):
         other_group.verify()
 
-    other_sender = replace(
-        entry, key_id=SenderKeyId(GROUP, member().verify_key)
-    )
+    other_sender = replace(entry, key_id=SenderKeyId(GROUP, member().verify_key))
     with pytest.raises(LogSignatureError):
         other_sender.verify()
 
@@ -142,16 +156,20 @@ def test_changing_any_field_breaks_the_signature():
 def test_an_entry_refuses_nonsense_fields():
     key_id = first_chain(member()).key_id
     good = {
-        'index': 0, 'key_id': key_id, 'chain_id': b'\x00' * 32,
-        'iteration': 0, 'previous': GENESIS, 'signature': b'\x00' * 64,
+        "index": 0,
+        "key_id": key_id,
+        "chain_id": b"\x00" * 32,
+        "iteration": 0,
+        "previous": GENESIS,
+        "signature": b"\x00" * 64,
     }
     for field, value in (
-        ('index', -1),
-        ('index', True),
-        ('chain_id', b'\x00' * 31),
-        ('iteration', -1),
-        ('previous', b''),
-        ('signature', b'\x00' * 63),
+        ("index", -1),
+        ("index", True),
+        ("chain_id", b"\x00" * 31),
+        ("iteration", -1),
+        ("previous", b""),
+        ("signature", b"\x00" * 63),
     ):
         with pytest.raises(LogFormatError):
             LogEntry(**dict(good, **{field: value}))
@@ -167,8 +185,12 @@ def test_an_entry_is_immutable():
     """
     identity = member()
     entry = LogEntry(
-        index=0, key_id=first_chain(identity).key_id, chain_id=b'\x00' * 32,
-        iteration=0, previous=GENESIS, signature=b'\x00' * 64,
+        index=0,
+        key_id=first_chain(identity).key_id,
+        chain_id=b"\x00" * 32,
+        iteration=0,
+        previous=GENESIS,
+        signature=b"\x00" * 64,
     ).sign(identity)
     with pytest.raises(Exception):
         entry.index = 5
@@ -177,6 +199,7 @@ def test_an_entry_is_immutable():
 # ---------------------------------------------------------------------------
 # The log itself
 # ---------------------------------------------------------------------------
+
 
 def test_a_log_links_and_verifies():
     identities = [member() for _ in range(3)]
@@ -229,8 +252,8 @@ def test_two_senders_in_different_groups_do_not_collide():
     the sender alone. The log has to agree with that.
     """
     identity = member()
-    here = first_chain(identity, 'group-one')
-    there = first_chain(identity, 'group-two')
+    here = first_chain(identity, "group-one")
+    there = first_chain(identity, "group-two")
     log = populated((identity, here), (identity, there))
     log.verify()
     assert log.latest_for(here.key_id).index == 0
@@ -251,7 +274,7 @@ def test_a_rewritten_entry_is_caught_by_verify():
     identity = member()
     state = first_chain(identity)
     log = populated((identity, state), (identity, state.rotate()))
-    tampered = replace(log.at(1), previous=b'\x00' * 32)
+    tampered = replace(log.at(1), previous=b"\x00" * 32)
 
     with pytest.raises(LogSignatureError):
         TransparencyLog.from_entries([log.at(0), tampered])
@@ -262,7 +285,9 @@ def test_a_dropped_entry_is_caught_by_from_entries():
 
     identity = member()
     first, second, third = (
-        first_chain(identity), first_chain(identity), first_chain(identity)
+        first_chain(identity),
+        first_chain(identity),
+        first_chain(identity),
     )
     log = populated((identity, first), (identity, second), (identity, third))
     # Entry 2 with entry 1's link: the index follows, the link does not.
@@ -293,6 +318,7 @@ def test_entries_are_a_copy():
 # What the client sees
 # ---------------------------------------------------------------------------
 
+
 def test_a_client_adopts_a_log_and_anchors_it():
     identity = member()
     log = populated((identity, first_chain(identity)))
@@ -312,9 +338,10 @@ def test_an_unknown_chain_is_unattested():
     # no opinion rather than a negative one.
     stranger = member()
     stranger_state = first_chain(stranger)
-    assert view.check(
-        distribution(stranger_state, stranger)
-    ) == AttestationStatus.UNATTESTED
+    assert (
+        view.check(distribution(stranger_state, stranger))
+        == AttestationStatus.UNATTESTED
+    )
 
 
 def test_the_latest_chain_is_current():
@@ -323,8 +350,7 @@ def test_the_latest_chain_is_current():
     log = populated((identity, state))
     view = SenderKeyTransparency()
     view.adopt(log)
-    assert view.check(distribution(state, identity)) == \
-        AttestationStatus.CURRENT
+    assert view.check(distribution(state, identity)) == AttestationStatus.CURRENT
 
 
 def test_an_older_chain_is_stale():
@@ -340,10 +366,8 @@ def test_an_older_chain_is_stale():
     log = populated((identity, original), (identity, rotated))
     view = SenderKeyTransparency()
     view.adopt(log)
-    assert view.check(distribution(original, identity)) == \
-        AttestationStatus.STALE
-    assert view.check(distribution(rotated, identity)) == \
-        AttestationStatus.CURRENT
+    assert view.check(distribution(original, identity)) == AttestationStatus.STALE
+    assert view.check(distribution(rotated, identity)) == AttestationStatus.CURRENT
 
 
 def test_a_gap_is_caught():
@@ -378,7 +402,9 @@ def test_a_fork_is_caught():
     # third. Two independently generated chains would differ everywhere and the
     # fork point would be meaningless.
     first, second, third = (
-        first_chain(identity), first_chain(identity), first_chain(identity)
+        first_chain(identity),
+        first_chain(identity),
+        first_chain(identity),
     )
     real = populated((identity, first), (identity, second), (identity, third))
     forked = populated(
@@ -404,7 +430,9 @@ def test_a_rollback_to_an_earlier_point_is_caught():
     """
     identity = member()
     first, second, third = (
-        first_chain(identity), first_chain(identity), first_chain(identity)
+        first_chain(identity),
+        first_chain(identity),
+        first_chain(identity),
     )
     full = populated((identity, first), (identity, second), (identity, third))
     short = populated((identity, first))
@@ -422,9 +450,12 @@ def test_a_forged_entry_is_caught():
     state = first_chain(identity)
     log = populated((identity, state))
     forged = LogEntry(
-        index=1, key_id=state.key_id, chain_id=state.rotate().chain_id,
-        iteration=0, previous=log.at(0).hash(),
-        signature=impostor.sign(b'anything').signature,
+        index=1,
+        key_id=state.key_id,
+        chain_id=state.rotate().chain_id,
+        iteration=0,
+        previous=log.at(0).hash(),
+        signature=impostor.sign(b"anything").signature,
     )
     view = SenderKeyTransparency()
     view.adopt(log)
@@ -484,8 +515,7 @@ def test_a_tail_truncation_is_not_detected():
     assert view.size() == 1
     assert view.anchor().index == 0
     # And it has no opinion about the chain it was not shown.
-    assert view.check(distribution(later, identity)) == \
-        AttestationStatus.UNATTESTED
+    assert view.check(distribution(later, identity)) == AttestationStatus.UNATTESTED
 
 
 def test_a_fresh_client_can_be_shown_any_first_chain():
@@ -501,8 +531,7 @@ def test_a_fresh_client_can_be_shown_any_first_chain():
     log = populated((identity, state))
     view = SenderKeyTransparency()
     view.adopt(log)
-    assert view.check(distribution(state, identity)) == \
-        AttestationStatus.CURRENT
+    assert view.check(distribution(state, identity)) == AttestationStatus.CURRENT
 
 
 def test_a_genesis_anchor_accepts_anything_and_forgets_nothing():
@@ -517,7 +546,7 @@ def test_an_anchor_refuses_nonsense():
     with pytest.raises(LogFormatError):
         Anchor(index=-2, entry_hash=GENESIS)
     with pytest.raises(LogFormatError):
-        Anchor(index=0, entry_hash=b'short')
+        Anchor(index=0, entry_hash=b"short")
 
 
 def test_known_chains_are_reported_in_log_order():
@@ -528,7 +557,9 @@ def test_known_chains_are_reported_in_log_order():
     view = SenderKeyTransparency()
     view.adopt(log)
     assert view.known_chains(first.key_id) == [
-        first.chain_id, second.chain_id, third.chain_id
+        first.chain_id,
+        second.chain_id,
+        third.chain_id,
     ]
 
 
@@ -554,6 +585,7 @@ def test_a_client_resumes_from_a_stored_anchor():
 # ---------------------------------------------------------------------------
 # Through the session builder
 # ---------------------------------------------------------------------------
+
 
 def test_a_replayed_trusted_chain_is_caught_with_a_log():
     """
@@ -623,9 +655,7 @@ def test_a_rotation_with_no_log_entry_still_needs_confirmation():
     view = SenderKeyTransparency()
     view.adopt(log)
     builder.process(distribution(original, identity), attestation=view)
-    assert builder.process(
-        distribution(rotated, identity), attestation=view
-    )[1] is True
+    assert builder.process(distribution(rotated, identity), attestation=view)[1] is True
 
 
 def test_an_unattested_replay_of_the_trusted_chain_is_reported_not_raised():
@@ -707,8 +737,8 @@ def test_the_log_survives_a_group_scoped_rotation():
     other, and the log keeps them apart.
     """
     identity = member()
-    here = first_chain(identity, 'group-one')
-    there = first_chain(identity, 'group-two')
+    here = first_chain(identity, "group-one")
+    there = first_chain(identity, "group-two")
     rotated_here = here.rotate()
     log = populated((identity, here), (identity, there))
     log.append_distribution(identity, distribution(rotated_here, identity))

@@ -119,21 +119,20 @@ def load_public_key(raw: bytes) -> mlkem.MLKEM768PublicKey:
         InvalidPQKey: the bytes are the wrong length or not a valid key.
     """
     if not isinstance(raw, (bytes, bytearray, memoryview)):
-        raise InvalidPQKey('an ML-KEM-768 public key must be bytes')
+        raise InvalidPQKey("an ML-KEM-768 public key must be bytes")
     raw = bytes(raw)
     if len(raw) != PUBLIC_KEY_LEN:
         raise InvalidPQKey(
-            f'an ML-KEM-768 public key is {PUBLIC_KEY_LEN} bytes, got '
-            f'{len(raw)}'
+            f"an ML-KEM-768 public key is {PUBLIC_KEY_LEN} bytes, got " f"{len(raw)}"
         )
     try:
         key = mlkem.MLKEM768PublicKey.from_public_bytes(raw)
     except Exception as exc:
-        raise InvalidPQKey('not a usable ML-KEM-768 public key') from exc
+        raise InvalidPQKey("not a usable ML-KEM-768 public key") from exc
     # Belt and braces: if a future cryptography adds a loader that accepts
     # something else, this is where it stops.
     if not isinstance(key, mlkem.MLKEM768PublicKey):
-        raise InvalidPQKey('the loaded key is not an ML-KEM-768 public key')
+        raise InvalidPQKey("the loaded key is not an ML-KEM-768 public key")
     return key
 
 
@@ -149,20 +148,19 @@ def encapsulate(public_key: mlkem.MLKEM768PublicKey) -> Tuple[bytes, bytes]:
         InvalidPQKey: the key is not an ML-KEM-768 encapsulation key.
     """
     if not isinstance(public_key, mlkem.MLKEM768PublicKey):
-        raise InvalidPQKey('encapsulate expects an MLKEM768PublicKey')
+        raise InvalidPQKey("encapsulate expects an MLKEM768PublicKey")
     shared, ciphertext = public_key.encapsulate()
     if len(shared) != SHARED_SECRET_LEN or len(ciphertext) != CIPHERTEXT_LEN:
         # Would mean the library changed the parameter set underneath us, and
         # every persisted prekey and every length constant here would be wrong.
         raise InvalidPQKey(
-            f'unexpected ML-KEM sizes: {len(shared)} byte secret, '
-            f'{len(ciphertext)} byte ciphertext'
+            f"unexpected ML-KEM sizes: {len(shared)} byte secret, "
+            f"{len(ciphertext)} byte ciphertext"
         )
     return shared, ciphertext
 
 
-def decapsulate(private_key: mlkem.MLKEM768PrivateKey,
-                ciphertext: bytes) -> bytes:
+def decapsulate(private_key: mlkem.MLKEM768PrivateKey, ciphertext: bytes) -> bytes:
     """
     Recover the shared secret from a peer's ciphertext.
 
@@ -179,19 +177,19 @@ def decapsulate(private_key: mlkem.MLKEM768PrivateKey,
             ML-KEM-768 decapsulation key.
     """
     if not isinstance(private_key, mlkem.MLKEM768PrivateKey):
-        raise InvalidPQKey('decapsulate expects an MLKEM768PrivateKey')
+        raise InvalidPQKey("decapsulate expects an MLKEM768PrivateKey")
     if not isinstance(ciphertext, (bytes, bytearray, memoryview)):
-        raise InvalidPQKey('the ciphertext must be bytes')
+        raise InvalidPQKey("the ciphertext must be bytes")
     ciphertext = bytes(ciphertext)
     if len(ciphertext) != CIPHERTEXT_LEN:
         raise InvalidPQKey(
-            f'an ML-KEM-768 ciphertext is {CIPHERTEXT_LEN} bytes, got '
-            f'{len(ciphertext)}'
+            f"an ML-KEM-768 ciphertext is {CIPHERTEXT_LEN} bytes, got "
+            f"{len(ciphertext)}"
         )
     return private_key.decapsulate(ciphertext)
 
 
-def generate_prekey(key_id: Optional[int] = None) -> 'PQOneTimePreKey':
+def generate_prekey(key_id: Optional[int] = None) -> "PQOneTimePreKey":
     """
     Generate one post-quantum one-time prekey.
 
@@ -200,11 +198,11 @@ def generate_prekey(key_id: Optional[int] = None) -> 'PQOneTimePreKey':
     """
     private_key = mlkem.MLKEM768PrivateKey.generate()
     if key_id is None:
-        key_id = int.from_bytes(os.urandom(8), 'big')
+        key_id = int.from_bytes(os.urandom(8), "big")
     return PQOneTimePreKey(key_id=key_id, private_key=private_key)
 
 
-def stocked_pq_store(count: int = 4) -> 'InMemoryPQPreKeyStore':
+def stocked_pq_store(count: int = 4) -> "InMemoryPQPreKeyStore":
     """
     A pool of ``count`` freshly generated prekeys, keyed 0..count-1.
 
@@ -215,7 +213,7 @@ def stocked_pq_store(count: int = 4) -> 'InMemoryPQPreKeyStore':
     without post-quantum protection.
     """
     if count < 1:
-        raise PQError(f'a pool needs at least one prekey, asked for {count}')
+        raise PQError(f"a pool needs at least one prekey, asked for {count}")
     store = InMemoryPQPreKeyStore()
     for key_id in range(count):
         store.put(generate_prekey(key_id=key_id))
@@ -232,15 +230,15 @@ class PQOneTimePreKey:
     persists.
     """
 
-    __slots__ = ('key_id', '_private_key')
+    __slots__ = ("key_id", "_private_key")
 
     def __init__(self, key_id: int, private_key: mlkem.MLKEM768PrivateKey):
         if isinstance(key_id, bool) or not isinstance(key_id, int):
-            raise PQError('key_id must be an int')
-        if key_id < 0 or key_id >= 2 ** 64:
-            raise PQError('key_id must fit in 64 bits')
+            raise PQError("key_id must be an int")
+        if key_id < 0 or key_id >= 2**64:
+            raise PQError("key_id must fit in 64 bits")
         if not isinstance(private_key, mlkem.MLKEM768PrivateKey):
-            raise PQError('private_key must be an MLKEM768PrivateKey')
+            raise PQError("private_key must be an MLKEM768PrivateKey")
         self.key_id = key_id
         self._private_key = private_key
 
@@ -271,7 +269,7 @@ class PQOneTimePreKey:
         return self._private_key.private_bytes_raw()
 
     @classmethod
-    def from_seed(cls, key_id: int, seed: bytes) -> 'PQOneTimePreKey':
+    def from_seed(cls, key_id: int, seed: bytes) -> "PQOneTimePreKey":
         """
         Rebuild a prekey from a stored seed.
 
@@ -280,22 +278,21 @@ class PQOneTimePreKey:
                 re-derived from it.
         """
         if not isinstance(seed, (bytes, bytearray, memoryview)):
-            raise PQError('seed must be bytes')
+            raise PQError("seed must be bytes")
         seed = bytes(seed)
         if len(seed) != PRIVATE_KEY_LEN:
-            raise PQError(
-                f'seed must be {PRIVATE_KEY_LEN} bytes, got {len(seed)}'
-            )
+            raise PQError(f"seed must be {PRIVATE_KEY_LEN} bytes, got {len(seed)}")
         try:
             private_key = mlkem.MLKEM768PrivateKey.from_seed_bytes(seed)
         except Exception as exc:
-            raise PQError('not a usable ML-KEM-768 seed') from exc
+            raise PQError("not a usable ML-KEM-768 seed") from exc
         return cls(key_id=key_id, private_key=private_key)
 
     def __repr__(self) -> str:
         # The id and the public half only. A repr that leaked key material would
         # end up in a log file, and a log file is somewhere keys go to die.
-        return f'<PQOneTimePreKey id={self.key_id} public={self.public_bytes[:4].hex()}...>'
+        public_prefix = self.public_bytes[:4].hex()
+        return f"<PQOneTimePreKey id={self.key_id} public={public_prefix}...>"
 
     def __eq__(self, other) -> bool:
         if not isinstance(other, PQOneTimePreKey):
@@ -398,25 +395,23 @@ class InMemoryPQPreKeyStore(PQPreKeyStore):
     def put(self, prekey: PQOneTimePreKey) -> None:
         with self._lock:
             if not isinstance(prekey, PQOneTimePreKey):
-                raise PQError('put expects a PQOneTimePreKey')
+                raise PQError("put expects a PQOneTimePreKey")
             if prekey.key_id in self._prekeys or prekey.key_id in self._consumed:
-                raise PQError(f'prekey {prekey.key_id} is already in the pool')
+                raise PQError(f"prekey {prekey.key_id} is already in the pool")
             self._prekeys[prekey.key_id] = prekey
 
     def consume(self, key_id: int) -> PQOneTimePreKey:
         with self._lock:
             if key_id in self._consumed:
                 raise PQPreKeyAlreadyUsed(
-                    f'post-quantum prekey {key_id} was already used; accepting '
-                    f'it would destroy the forward secrecy the ML-KEM '
-                    f'contribution exists to provide'
+                    f"post-quantum prekey {key_id} was already used; accepting "
+                    f"it would destroy the forward secrecy the ML-KEM "
+                    f"contribution exists to provide"
                 )
             try:
                 prekey = self._prekeys.pop(key_id)
             except KeyError:
-                raise NoSuchPQPreKey(
-                    f'unknown post-quantum prekey {key_id}'
-                ) from None
+                raise NoSuchPQPreKey(f"unknown post-quantum prekey {key_id}") from None
             self._consumed.add(key_id)
             self._reserved.discard(key_id)
             return prekey
@@ -424,15 +419,11 @@ class InMemoryPQPreKeyStore(PQPreKeyStore):
     def peek(self, key_id: int) -> PQOneTimePreKey:
         with self._lock:
             if key_id in self._consumed:
-                raise NoSuchPQPreKey(
-                    f'post-quantum prekey {key_id} was already used'
-                )
+                raise NoSuchPQPreKey(f"post-quantum prekey {key_id} was already used")
             try:
                 return self._prekeys[key_id]
             except KeyError:
-                raise NoSuchPQPreKey(
-                    f'unknown post-quantum prekey {key_id}'
-                ) from None
+                raise NoSuchPQPreKey(f"unknown post-quantum prekey {key_id}") from None
 
     def peek_any(self) -> Optional[PQOneTimePreKey]:
         """
@@ -469,12 +460,10 @@ class InMemoryPQPreKeyStore(PQPreKeyStore):
         with self._lock:
             if key_id in self._consumed:
                 raise PQPreKeyAlreadyUsed(
-                    f'post-quantum prekey {key_id} was already used'
+                    f"post-quantum prekey {key_id} was already used"
                 )
             if key_id not in self._prekeys:
-                raise NoSuchPQPreKey(
-                    f'unknown post-quantum prekey {key_id}'
-                )
+                raise NoSuchPQPreKey(f"unknown post-quantum prekey {key_id}")
             self._reserved.discard(key_id)
 
     def reserved_ids(self) -> List[int]:
@@ -493,7 +482,7 @@ class InMemoryPQPreKeyStore(PQPreKeyStore):
         with self._lock:
             return key_id in self._consumed
 
-    def replenish(self, low_water_mark: int, target: int = None) -> int:
+    def replenish(self, low_water_mark: int, target: Optional[int] = None) -> int:
         """
         Top the pool up to ``target``, and report how many were added.
 
@@ -502,14 +491,16 @@ class InMemoryPQPreKeyStore(PQPreKeyStore):
         """
         target = target if target is not None else low_water_mark * 2
         if target <= 0:
-            raise PQPreKeyExhausted('a replenishment target must be positive')
+            raise PQPreKeyExhausted("a replenishment target must be positive")
         with self._lock:
             missing = target - len(self._prekeys)
             added = 0
             while len(self._prekeys) < target:
                 candidate = generate_prekey()
-                if candidate.key_id in self._prekeys or \
-                        candidate.key_id in self._consumed:
+                if (
+                    candidate.key_id in self._prekeys
+                    or candidate.key_id in self._consumed
+                ):
                     continue
                 self._prekeys[candidate.key_id] = candidate
                 added += 1

@@ -11,4 +11,4 @@ for what is and is not protected: the stores are single-process atomic, and
 whole-file rollback by an attacker with write access is not detected.
 """
 
-__all__ = ['container', 'store']
+__all__ = ["container", "store"]

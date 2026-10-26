@@ -120,14 +120,14 @@ def session_associated_data(
         order of the two identities is fixed rather than chosen per call.
     """
     if not isinstance(initiator_identity, VerifyKey):
-        raise SessionError('initiator_identity must be a VerifyKey')
+        raise SessionError("initiator_identity must be a VerifyKey")
     if not isinstance(responder_identity, VerifyKey):
-        raise SessionError('responder_identity must be a VerifyKey')
+        raise SessionError("responder_identity must be a VerifyKey")
     return length_prefixed(
         SESSION_AD_LABEL,
         bytes(initiator_identity),
         bytes(responder_identity),
-        protocol_version.to_bytes(4, 'big'),
+        protocol_version.to_bytes(4, "big"),
     )
 
 
@@ -157,23 +157,18 @@ class Session:
     ) -> None:
         if (ratchet is None) == (ratchet_factory is None):
             raise SessionError(
-                'a Session needs either a ratchet or a factory that builds one, '
-                'not both and not neither'
+                "a Session needs either a ratchet or a factory that builds one, "
+                "not both and not neither"
             )
-        if x3dh_session is not None and \
-                x3dh_session.is_initiator != is_initiator:
-            raise SessionError(
-                'is_initiator contradicts the X3DH session it was given'
-            )
+        if x3dh_session is not None and x3dh_session.is_initiator != is_initiator:
+            raise SessionError("is_initiator contradicts the X3DH session it was given")
         self._ratchet = ratchet
         self._ratchet_factory = ratchet_factory
         self._x3dh = x3dh_session
         self._is_initiator = is_initiator
         self._initiator_identity = initiator_identity
         self._responder_identity = responder_identity
-        self._ad = session_associated_data(
-            initiator_identity, responder_identity
-        )
+        self._ad = session_associated_data(initiator_identity, responder_identity)
 
     # ------------------------------------------------------------------
     # Properties
@@ -201,17 +196,13 @@ class Session:
     @property
     def local_identity(self) -> VerifyKey:
         return (
-            self._initiator_identity
-            if self._is_initiator
-            else self._responder_identity
+            self._initiator_identity if self._is_initiator else self._responder_identity
         )
 
     @property
     def peer_identity(self) -> VerifyKey:
         return (
-            self._responder_identity
-            if self._is_initiator
-            else self._initiator_identity
+            self._responder_identity if self._is_initiator else self._initiator_identity
         )
 
     @property
@@ -246,7 +237,10 @@ class Session:
                 responder's confirmation, so there is no root key to build over.
         """
         if self._ratchet is None:
-            self._ratchet = self._ratchet_factory()
+            factory = self._ratchet_factory
+            if factory is None:  # pragma: no cover - __init__ enforces this
+                raise SessionError("ratchet factory is already consumed")
+            self._ratchet = factory()
             self._ratchet_factory = None
         return self._ratchet
 
@@ -281,25 +275,24 @@ class Session:
             WireError: the frame is malformed.
         """
         if self._x3dh is None:
-            raise SessionError('this session is already established')
+            raise SessionError("this session is already established")
         if not self._is_initiator:
             raise SessionError(
-                'only the initiator verifies a key confirmation; the responder '
-                'produces it'
+                "only the initiator verifies a key confirmation; the responder "
+                "produces it"
             )
         if self._x3dh.is_confirmed:
             # Verifying the same MAC twice would succeed and prove nothing.
             # More importantly, it would let a caller treat a confirmed
             # session as one still waiting on the peer.
-            raise SessionError('this session is already confirmed')
+            raise SessionError("this session is already confirmed")
         self._x3dh.verify_key_confirmation(decode_key_confirmation(frame))
 
     # ------------------------------------------------------------------
     # Messages
     # ------------------------------------------------------------------
 
-    def send(self, plaintext: bytes,
-             profile: Optional[PaddingProfile] = None) -> bytes:
+    def send(self, plaintext: bytes, profile: Optional[PaddingProfile] = None) -> bytes:
         """
         Encrypt one message into a complete wire frame, padded.
 
@@ -330,15 +323,14 @@ class Session:
             FrameTooLarge: the frame would exceed :data:`MAX_FRAME_BYTES`.
         """
         if not isinstance(plaintext, (bytes, bytearray, memoryview)):
-            raise SessionError('plaintext must be bytes')
+            raise SessionError("plaintext must be bytes")
         if profile is None:
             profile = DEFAULT_PROFILE
         padded = pad(bytes(plaintext), profile)
         ciphertext, header = self.ratchet.encrypt(padded, self._ad)
         return encode_ratchet_message(ciphertext, header, profile)
 
-    def receive(self, frame: bytes,
-                profile: Optional[PaddingProfile] = None) -> bytes:
+    def receive(self, frame: bytes, profile: Optional[PaddingProfile] = None) -> bytes:
         """
         Decrypt one complete wire frame and strip its padding.
 
@@ -361,9 +353,7 @@ class Session:
                 header and a tampered ciphertext all look like from here.
         """
         message = decode_ratchet_message(frame)
-        padded = self.ratchet.decrypt(
-            message.ciphertext, message.to_header(), self._ad
-        )
+        padded = self.ratchet.decrypt(message.ciphertext, message.to_header(), self._ad)
         return unpad(padded)
 
     # ------------------------------------------------------------------
@@ -378,7 +368,7 @@ class Session:
         is_initiator: bool,
         local_identity: VerifyKey,
         peer_identity: VerifyKey,
-    ) -> 'Session':
+    ) -> "Session":
         """
         Resume a session from a persisted :class:`SessionState`.
 
@@ -434,10 +424,10 @@ def _check_role_against_state(state, is_initiator: bool) -> None:
     to get right, and there is no state field that settles it.
     """
     document = state if isinstance(state, dict) else state.serialize()
-    if is_initiator and document.get('dh_remote_pub') is None:
+    if is_initiator and document.get("dh_remote_pub") is None:
         raise SessionError(
-            'this state has no remote ratchet key, so it was written by a '
-            'responder that had not yet received a message; it cannot be the '
+            "this state has no remote ratchet key, so it was written by a "
+            "responder that had not yet received a message; it cannot be the "
             "initiator's state"
         )
 
@@ -485,9 +475,9 @@ def initiate(
     bundle: PreKeyBundle,
     *,
     x3dh: Optional[X3DH] = None,
-    associated_data: bytes = b'',
+    associated_data: bytes = b"",
     minimum_signed_prekey_id: Optional[int] = None,
-) -> Tuple['Session', bytes]:
+) -> Tuple["Session", bytes]:
     """
     Start a session as the initiator.
 
@@ -536,8 +526,8 @@ def accept(
     responder: X3DHResponder,
     init_frame: bytes,
     *,
-    associated_data: bytes = b'',
-) -> Tuple['Session', bytes]:
+    associated_data: bytes = b"",
+) -> Tuple["Session", bytes]:
     """
     Answer a handshake as the responder.
 
@@ -578,6 +568,4 @@ def accept(
         initiator_identity=x3dh_session.initiator_identity,
         responder_identity=x3dh_session.responder_identity,
     )
-    return session, encode_key_confirmation(
-        x3dh_session.make_key_confirmation()
-    )
+    return session, encode_key_confirmation(x3dh_session.make_key_confirmation())

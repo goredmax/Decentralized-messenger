@@ -34,6 +34,8 @@ from src.protocol.wire import (
 
 from src.crypto.pq import stocked_pq_store
 from src.storage.container import Container
+
+
 def build(prekey_count=3, signed_prekey_id=0):
     x3dh = X3DH()
     identity_private, _ = x3dh.generate_identity_keys()
@@ -68,8 +70,8 @@ class TestExhaustionIsLoud:
         with pytest.raises(PrekeyPoolExhausted) as caught:
             responder.publish_bundle()
         message = str(caught.value)
-        assert 'forward secrecy' in message
-        assert 'allow_no_one_time_prekey' in message
+        assert "forward secrecy" in message
+        assert "allow_no_one_time_prekey" in message
 
     def test_opt_in_yields_three_dh(self):
         x3dh, responder, _ = build(prekey_count=0)
@@ -136,7 +138,7 @@ class TestReplenishment:
         with pytest.raises(ValueError):
             store.replenish(low_water_mark=5, target=3)
         with pytest.raises(ValueError):
-            store.replenish(low_water_mark=0, target=10 ** 9)
+            store.replenish(low_water_mark=0, target=10**9)
 
     def test_exhausted_pool_can_be_rescued(self):
         x3dh, responder, store = build(prekey_count=1)
@@ -227,12 +229,12 @@ class TestPrekeyReservation:
         from src.storage.store import PersistentPreKeyStore
 
         kdf = KdfParams(n_log2=12, r=8, p=1)
-        path = str(tmp_path / 'prekeys.bin')
-        store = PersistentPreKeyStore(Container.create(path, 'pw', kdf_params=kdf))
+        path = str(tmp_path / "prekeys.bin")
+        store = PersistentPreKeyStore(Container.create(path, "pw", kdf_params=kdf))
         store.replenish(low_water_mark=3)
         store.reserve_next()
 
-        reopened = PersistentPreKeyStore(Container.open(path, 'pw'))
+        reopened = PersistentPreKeyStore(Container.open(path, "pw"))
         assert len(reopened.reserved_ids()) == 1
         # The reserved one is not handed out again.
         assert reopened.reserve_next().key_id != 0 or True
@@ -243,13 +245,13 @@ class TestPrekeyReservation:
         from src.storage.store import PersistentPreKeyStore
 
         kdf = KdfParams(n_log2=12, r=8, p=1)
-        path = str(tmp_path / 'prekeys.bin')
-        store = PersistentPreKeyStore(Container.create(path, 'pw', kdf_params=kdf))
+        path = str(tmp_path / "prekeys.bin")
+        store = PersistentPreKeyStore(Container.create(path, "pw", kdf_params=kdf))
         store.replenish(low_water_mark=1)
         taken = store.reserve_next()
         store.release(taken.key_id)
 
-        reopened = PersistentPreKeyStore(Container.open(path, 'pw'))
+        reopened = PersistentPreKeyStore(Container.open(path, "pw"))
         assert reopened.reserved_ids() == []
 
 
@@ -274,7 +276,7 @@ class TestRotation:
         """
         x3dh, old_responder, _ = build(signed_prekey_id=1)
         cached = old_responder.publish_bundle()
-        X3DH.verify_bundle(cached)          # the signature is still perfectly valid
+        X3DH.verify_bundle(cached)  # the signature is still perfectly valid
 
         alice_private, _ = x3dh.generate_identity_keys()
         with pytest.raises(RetiredSignedPrekey):
@@ -327,9 +329,7 @@ class TestRotation:
         )
         alice_private, _ = x3dh.generate_identity_keys()
         with pytest.raises(InvalidSignatureError):
-            x3dh.initiate_handshake(
-                alice_private, forged, minimum_signed_prekey_id=99
-            )
+            x3dh.initiate_handshake(alice_private, forged, minimum_signed_prekey_id=99)
 
     def test_begin_forwards_the_minimum(self):
         x3dh, old_responder, _ = build(signed_prekey_id=1)
@@ -343,11 +343,12 @@ class TestRotation:
         identity_private, identity_public = x3dh.generate_identity_keys()
         spk_private, _, _ = x3dh.generate_signed_prekey(identity_private)
         from src.crypto.x3dh import InvalidHandshakeError, PreKeyBundle
+
         with pytest.raises(InvalidHandshakeError):
             PreKeyBundle(
                 identity_key=identity_public,
                 signed_prekey=spk_private.public_key,
-                signed_prekey_signature=b'\x00' * 64,
+                signed_prekey_signature=b"\x00" * 64,
                 signed_prekey_id=-1,
             )
 
@@ -362,16 +363,16 @@ class TestRotationWorkflow:
         """
         from src.storage.store import IdentityStore, PersistentPreKeyStore
 
-        kdf = __import__(
-            'src.storage.container', fromlist=['KdfParams']
-        ).KdfParams(n_log2=12, r=8, p=1)
-        password = 'test password'
+        kdf = __import__("src.storage.container", fromlist=["KdfParams"]).KdfParams(
+            n_log2=12, r=8, p=1
+        )
+        password = "test password"
         store = PersistentPreKeyStore(
-            Container.create(str(tmp_path / 'prekeys.bin'), password, kdf_params=kdf)
+            Container.create(str(tmp_path / "prekeys.bin"), password, kdf_params=kdf)
         )
         store.replenish(low_water_mark=4)
         identity = IdentityStore(
-            Container.create(str(tmp_path / 'identity.bin'), password, kdf_params=kdf)
+            Container.create(str(tmp_path / "identity.bin"), password, kdf_params=kdf)
         )
         identity.initialise()
 
@@ -390,7 +391,9 @@ class TestRotationWorkflow:
 
         # Rotation happens, and survives a restart.
         assert identity.rotate() == 2
-        reopened = IdentityStore(Container.open(str(tmp_path / 'identity.bin'), password))
+        reopened = IdentityStore(
+            Container.open(str(tmp_path / "identity.bin"), password)
+        )
         assert reopened.signed_prekey_id == 2
 
         x3dh = X3DH()
@@ -411,7 +414,8 @@ class TestRotationWorkflow:
             signed_prekey_id=reopened.signed_prekey_id,
         )
         session, init = x3dh.begin(
-            alice_private, fresh_responder.publish_bundle(),
+            alice_private,
+            fresh_responder.publish_bundle(),
             minimum_signed_prekey_id=2,
         )
         responder_session = fresh_responder.respond(init)
@@ -433,13 +437,11 @@ class TestPersistentReplenishment:
         from src.storage.store import PersistentPreKeyStore
 
         kdf = KdfParams(n_log2=12, r=8, p=1)
-        path = str(tmp_path / 'prekeys.bin')
-        store = PersistentPreKeyStore(
-            Container.create(path, 'pw', kdf_params=kdf)
-        )
+        path = str(tmp_path / "prekeys.bin")
+        store = PersistentPreKeyStore(Container.create(path, "pw", kdf_params=kdf))
         assert store.replenish(low_water_mark=6) == 6
 
-        reopened = PersistentPreKeyStore(Container.open(path, 'pw'))
+        reopened = PersistentPreKeyStore(Container.open(path, "pw"))
         assert reopened.count() == 6
 
     def test_replenishment_validates_arguments(self, tmp_path):
@@ -447,8 +449,9 @@ class TestPersistentReplenishment:
         from src.storage.store import PersistentPreKeyStore
 
         store = PersistentPreKeyStore(
-            Container.create(str(tmp_path / 'p.bin'), 'pw',
-                             kdf_params=KdfParams(n_log2=12))
+            Container.create(
+                str(tmp_path / "p.bin"), "pw", kdf_params=KdfParams(n_log2=12)
+            )
         )
         with pytest.raises(ValueError):
             store.replenish(low_water_mark=-1)

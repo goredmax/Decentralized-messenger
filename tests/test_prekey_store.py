@@ -217,7 +217,7 @@ class TestValueObject:
             OneTimePreKey(
                 key_id=1,
                 private_key=private.private_key,
-                public_key=b'\x00' * 31,  # type: ignore[arg-type]
+                public_key=b"\x00" * 31,  # type: ignore[arg-type]
             )
 
     def test_generated_ids_are_distinct(self):
@@ -231,4 +231,5 @@ class TestValueObject:
 
 def PrivateKeyFactory():  # noqa: N802 - small helper to keep the test readable
     from nacl.public import PrivateKey
+
     return PrivateKey.generate()
