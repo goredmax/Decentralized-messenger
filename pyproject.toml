@@ -13,7 +13,7 @@ name = "decentralized-messenger"
 version = "0.1.0"
 description = "Decentralized messenger with E2EE: X3DH, Double Ratchet, Sender Keys"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = { file = "LICENSE" }
 authors = [{ name = "goredmax" }]
 keywords = ["e2ee", "x3dh", "double-ratchet", "signal-protocol", "messaging"]
@@ -50,10 +50,10 @@ packages = [
 
 [tool.black]
 line-length = 88
-target-version = ["py311"]
+target-version = ["py313"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 files = ["src"]
 show_error_codes = true
 warn_unused_ignores = true

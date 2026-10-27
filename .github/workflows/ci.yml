@@ -4,6 +4,10 @@ name: CI
 permissions:
   contents: read
 
+# Every job installs from a hashed lock and none upgrades pip first: the locks
+# pin pip itself (--allow-unsafe), so an upgrade would fetch an unpinned copy
+# that the next command immediately replaces.
+
 on:
   push:
     branches: [main, develop]
@@ -13,38 +17,23 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # pyproject.toml declares requires-python >= 3.11 and mypy is configured
-        # with python_version = "3.11", so that version has to be executed, not
-        # only declared. 3.11 deliberately skips the locked install, because
-        # requirements-dev.lock was resolved for 3.13: its pins are the same, but
-        # the hashes were compiled for that version. Until the lock is
-        # regenerated, 3.11 installs from requirements.in's ranges and proves
-        # only that the code runs on the declared minimum.
-        python-version: ["3.11", "3.13"]
+    # pyproject.toml declares 3.13 as the minimum supported interpreter, and
+    # requirements-dev.lock is resolved on it. Running the minimum is what
+    # makes requires-python an executed claim rather than a comment.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
 
       - name: Install pinned dependencies
-        if: matrix.python-version == '3.13'
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-dev.lock
-
-      - name: Install unlocked dependencies for 3.11 compatibility
-        if: matrix.python-version == '3.11'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.in -r requirements-dev.in
+        run: python -m pip install --require-hashes -r requirements-dev.lock
 
       - name: Run tests
-        run: python -m pytest tests/ -v --cov=src --cov-report=term-missing
+        run: >-
+          python -m pytest tests/ -v --cov=src --cov-report=term-missing
+          --cov-fail-under=90
 
   quality:
     runs-on: ubuntu-latest
@@ -56,9 +45,15 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-dev.lock
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+
+      # --no-build-isolation makes the build use the setuptools and wheel pinned
+      # in the lock instead of fetching the latest backend; --no-deps keeps the
+      # runtime set exactly what the lock installed. This is the only step that
+      # exercises [build-system] and [tool.setuptools] at all: pytest reaches
+      # src/ through pytest.ini's pythonpath, not through an installed package.
+      - name: Install the package
+        run: python -m pip install --no-deps --no-build-isolation -e .
 
       - name: Check formatting
         run: black --check .
@@ -79,9 +74,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-dev.lock
+        run: python -m pip install --require-hashes -r requirements-dev.lock
 
       # No "|| true": the previous workflow swallowed the exit code, so the job
       # stayed green while reporting findings. bandit exits non-zero on issues
@@ -99,9 +92,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install --require-hashes -r requirements-dev.lock
+        run: python -m pip install --require-hashes -r requirements-dev.lock
 
       # Also without "|| true", for the same reason.
       - name: Audit locked dependencies

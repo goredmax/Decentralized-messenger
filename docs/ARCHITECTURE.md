@@ -141,7 +141,7 @@ src/
 ├── storage/      container.py, store.py
 └── tor/          пустая заглушка
 examples/         cli.py — демонстрация полного цикла в одном процессе
-tests/            684 теста
+tests/            685 тестов
 docs/             ARCHITECTURE.md, SECURITY_BOUNDARIES.md
 ```
 
